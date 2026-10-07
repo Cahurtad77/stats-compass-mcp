@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es-CO">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bitácora</title>
+  <meta name="description" content="App personal liviana: finanzas, contabilidad y vida profesional, local-first.">
+  <meta name="theme-color" content="#1f6f5c">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script>try { const t = localStorage.getItem('bitacora-tema'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+</head>
+<body>
+  <a class="saltar" href="#contenido">Saltar al contenido</a>
+  <div class="marco">
+    <aside class="lateral">
+      <div class="marca"><img src="icon.svg" alt="" width="28" height="28"> <strong>Bitácora</strong></div>
+      <nav id="nav" aria-label="Módulos"></nav>
+      <button class="btn-sec tema" data-tema type="button">Tema claro / oscuro</button>
+    </aside>
+    <div class="principal">
+      <div class="barra-movil"><button id="btn-menu" class="icono" aria-label="Menú">☰</button><strong>Bitácora</strong>
+        <button class="icono" data-tema type="button" aria-label="Cambiar tema">◐</button></div>
+      <main id="contenido" tabindex="-1"><p class="sutil">Cargando…</p></main>
+    </div>
+  </div>
+  <noscript>Bitácora necesita JavaScript.</noscript>
+  <script type="module" src="core/app.js"></script>
+</body>
+</html>

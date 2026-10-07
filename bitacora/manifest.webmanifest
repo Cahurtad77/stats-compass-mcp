@@ -1,0 +1,12 @@
+{
+  "name": "Bitácora",
+  "short_name": "Bitácora",
+  "description": "Finanzas, contabilidad y vida profesional en una app liviana y local.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f5f1",
+  "theme_color": "#1f6f5c",
+  "lang": "es-CO",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
