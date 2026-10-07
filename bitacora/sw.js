@@ -1,10 +1,10 @@
 // Service worker: (1) uso sin conexión, (2) recibir fotos compartidas desde WhatsApp u otras apps
 // (Web Share Target, Android). Subir VERSION al publicar cambios.
-const VERSION = 'bitacora-v2';
+const VERSION = 'bitacora-v3';
 const COMPARTIDOS = 'bitacora-compartidos'; // la página los mueve a IndexedDB al abrir la Bandeja
 const ARCHIVOS = ['./', 'index.html', 'styles.css', 'icon.svg', 'manifest.webmanifest',
-  'core/app.js', 'core/db.js', 'core/ui.js', 'core/zip.js',
-  'modules/finanzas/finanzas.js', 'modules/finanzas/ledger.js', 'modules/finanzas/secciones.js', 'modules/finanzas/ia.js'];
+  'core/app.js', 'core/db.js', 'core/ui.js', 'core/zip.js', 'core/xlsx.js',
+  'modules/finanzas/finanzas.js', 'modules/finanzas/ledger.js', 'modules/finanzas/secciones.js', 'modules/finanzas/ia.js', 'modules/finanzas/extractos.js'];
 
 self.addEventListener('install', (e) => e.waitUntil(caches.open(VERSION).then((c) => c.addAll(ARCHIVOS)).then(() => self.skipWaiting())));
 self.addEventListener('activate', (e) => e.waitUntil(

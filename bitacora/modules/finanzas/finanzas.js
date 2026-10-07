@@ -4,9 +4,10 @@ import * as DB from '../../core/db.js';
 import { h, html, $, $$, aviso, descargar, leerArchivo, hoyISO, formularioAObjeto, graficoMensual, barraProgreso } from '../../core/ui.js';
 import * as S from './secciones.js';
 import * as IA from './ia.js';
+import * as X from './extractos.js';
 
 const SECCIONES = [
-  ['resumen', 'Resumen'], ['bandeja', 'Bandeja'], ['movimientos', 'Movimientos'], ['fugas', 'Fugas'], ['metas', 'Metas'],
+  ['resumen', 'Resumen'], ['bandeja', 'Bandeja'], ['extractos', 'Extractos'], ['movimientos', 'Movimientos'], ['fugas', 'Fugas'], ['metas', 'Metas'],
   ['presupuesto', 'Presupuesto'], ['contador', 'Contador'], ['impuestos', 'Impuestos'], ['cuentas', 'Cuentas'],
   ['recurrentes', 'Recurrentes'], ['datos', 'Importar / Exportar'],
 ];
@@ -316,13 +317,12 @@ function vistaDatos(conIA) {
       : h`<div class="formulario fila"><input type="password" id="ia-clave" placeholder="sk-ant-…" autocomplete="off" aria-label="Clave de API"><button class="btn" data-guardar-clave>Guardar</button></div>`}
   </section>
   <div class="dos-columnas">
-    <section class="panel"><h2>Importar extracto bancario (CSV)</h2>
-      <p class="sutil">Descarga el extracto desde tu banca en línea (CSV o Excel guardado como CSV). Valores negativos = salidas.</p>
-      <input type="file" id="arch-csv" accept=".csv,.txt">
-      <div id="mapeo"></div></section>
+    <section class="panel"><h2>Importar extractos bancarios</h2>
+      <p class="sutil">PDF, fotos, Excel o CSV de tus cuentas y tarjetas, de varios meses o años: se revisan y clasifican por grupos antes de contabilizarse.</p>
+      <a class="btn" href="#/finanzas/extractos">Ir a Extractos</a></section>
     <section class="panel"><h2>Reglas de categorización</h2>
-      <p class="sutil">Si la descripción contiene el texto, se asigna la categoría. Se aplican al importar.</p>
-      <table class="tabla"><tbody>${estado.reglas.map((r) => h`<tr><td>"${r.contiene}"</td><td>→ ${nombreCuenta(r.cuenta)}</td>
+      <p class="sutil">Si la descripción contiene el texto (o es ese comercio), se asigna la categoría. Se crean solas al clasificar extractos con “recordar”.</p>
+      <table class="tabla"><tbody>${estado.reglas.map((r) => h`<tr><td>${r.clave ? h`comercio <strong>${r.clave}</strong>` : `"${r.contiene}"`}</td><td>→ ${nombreCuenta(r.cuenta)}</td>
         <td><button class="icono" data-borrar-regla="${r.id}" aria-label="Borrar">🗑</button></td></tr>`)}</tbody></table>
       <form id="f-regla" class="formulario"><div class="campos"><label>Contiene<input name="contiene" required placeholder="EXITO"></label>
         <label>Categoría<select name="cuenta">${opcionesCuenta(['gasto', 'ingreso'])}</select></label></div>
@@ -338,20 +338,6 @@ function vistaDatos(conIA) {
     <p class="sutil">El CSV tidy tiene una fila por partida; en R: <code>source("r/leer_bitacora.R")</code> y <code>bitacora_resumen(leer_bitacora("bitacora.csv"))</code>.</p>
     <details><summary>Zona de peligro</summary><button class="btn-peligro" data-accion="reiniciar">Borrar todos los datos financieros</button></details>
   </section>`;
-}
-
-function mapeoCSV(filas) {
-  const cab = filas[0] || [];
-  const adivina = (re) => Math.max(0, cab.findIndex((c) => re.test(c)));
-  const sel = (nombre, idx) => h`<select name="${nombre}">${cab.map((c, i) => h`<option value="${i}" ${i === idx ? 'selected' : ''}>${c || `Columna ${i + 1}`}</option>`)}</select>`;
-  return h`<form id="f-import" class="formulario"><div class="campos">
-    <label>Fecha${sel('colFecha', adivina(/fecha|date/i))}</label>
-    <label>Descripción${sel('colDescripcion', adivina(/desc|concepto|detalle/i))}</label>
-    <label>Valor${sel('colMonto', adivina(/valor|monto|importe|amount/i))}</label>
-    <label>Cuenta del extracto<select name="cuentaBanco">${opcionesCuenta(['activo', 'pasivo'], 'banco')}</select></label>
-    <label class="check"><input type="checkbox" name="invertir"> Invertir signos (tarjetas de crédito)</label></div>
-    <p class="sutil">${filas.length - 1} filas detectadas. Vista previa: ${filas.slice(1, 3).map((f) => f.join(' | ')).join(' ⏎ ')}</p>
-    <div class="acciones"><button class="btn">Importar</button></div></form>`;
 }
 
 // ---------- Datos de ejemplo ----------
@@ -395,6 +381,7 @@ async function montar(el, seccion = 'resumen') {
   const ignoradas = await DB.ajuste('fugas_ignoradas', []);
   const docs = await DB.ajuste(`contador_docs_${anio}`, []);
   const preguntasGenerales = await DB.ajuste('contador_preguntas', []);
+  const importacion = sec === 'extractos' ? await X.cargarImportacion() : null;
   const pendientes = estado.soportes.filter((x) => x.estado === 'pendiente');
   const actual = pendientes.find((x) => x.id === soporteVisto) || pendientes[0];
   if (sec === 'bandeja' && actual && prellenado?.soporteId !== actual.id) prellenado = { soporteId: actual.id, fecha: hoyISO(), tipo: 'gasto', partidas: [], tercero: '', descripcion: actual.texto || '' };
@@ -403,6 +390,7 @@ async function montar(el, seccion = 'resumen') {
     recurrentes: vistaRecurrentes, impuestos: () => vistaImpuestos(anio), datos: () => vistaDatos(conIA),
     bandeja: () => S.vistaBandeja(estado, { seleccionado: actual?.id, conIA, formulario: actual ? formularioMovimiento(prellenado) : '' }),
     fugas: () => S.vistaFugas(estado, ignoradas), metas: () => S.vistaMetas(estado),
+    extractos: () => X.vistaExtractos(estado, { conIA, ...importacion }),
     contador: () => S.vistaContador(estado, { anio, docs, preguntasGenerales }),
   };
   const vista = vistas[sec] || vistas.resumen;
@@ -414,6 +402,7 @@ async function montar(el, seccion = 'resumen') {
       h`<a href="#/finanzas/${id}" class="${id === sec ? 'activo' : ''}" ${id === sec ? 'aria-current="page"' : ''}>${t}${(id === 'recurrentes' && recurrentesPendientes()) || (id === 'bandeja' && pendientes.length) ? h` <span class="punto"></span>` : ''}</a>`)}</nav>
     <div id="vista">${vista()}</div>`;
   conectar(el, sec, () => montar(el, seccion), { anio, docs, preguntasGenerales, ignoradas });
+  if (sec === 'extractos') X.conectarExtractos(el, estado, () => montar(el, seccion), importacion);
 }
 
 function conectar(el, sec, refrescar, ctx) {
@@ -490,8 +479,8 @@ function conectar(el, sec, refrescar, ctx) {
       aviso(`${fechas.length} movimiento(s) registrados`); refrescar();
     } else if (d.exportar) await exportar(d.exportar);
     else if (d.accion === 'demo') { await cargarDemo(); refrescar(); }
-    else if (d.accion === 'reiniciar' && confirm('Esto borra movimientos, presupuestos, recurrentes y reglas. ¿Seguro? (Haz un respaldo antes)')) {
-      for (const a of ['asientos', 'presupuestos', 'recurrentes', 'reglas']) await DB.vaciar(a);
+    else if (d.accion === 'reiniciar' && confirm('Esto borra movimientos, presupuestos, recurrentes, reglas, soportes, metas y extractos. ¿Seguro? (Haz un respaldo antes)')) {
+      for (const a of ['asientos', 'presupuestos', 'recurrentes', 'reglas', 'soportes', 'metas', 'importacion', 'lotes']) await DB.vaciar(a);
       aviso('Datos borrados'); refrescar();
     }
   };
@@ -531,21 +520,6 @@ function conectar(el, sec, refrescar, ctx) {
     await DB.guardar('reglas', formularioAObjeto(e.target)); refrescar();
   });
 
-  $('#arch-csv', el)?.addEventListener('change', async (e) => {
-    const archivo = e.target.files[0];
-    if (!archivo) return;
-    const filas = L.parseCSV(await leerArchivo(archivo));
-    $('#mapeo', el).innerHTML = mapeoCSV(filas).html;
-    $('#f-import', el).addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      const d = formularioAObjeto(ev.target);
-      const datos = d.invertir ? filas.map((f, i) => (i === 0 ? f : f.map((v, j) => (j === Number(d.colMonto) ? String(-L.aCentavos(v) / 100) : v)))) : filas;
-      const { asientos, errores } = L.extractoAAsientos(datos, { colFecha: +d.colFecha, colDescripcion: +d.colDescripcion, colMonto: +d.colMonto, cuentaBanco: d.cuentaBanco, reglas: estado.reglas });
-      await DB.guardarVarios('asientos', asientos);
-      aviso(`${asientos.length} movimientos importados${errores.length ? `; ${errores.length} filas omitidas` : ''}`);
-      location.hash = '#/finanzas/movimientos';
-    });
-  });
   $('#arch-soporte', el)?.addEventListener('change', async (e) => {
     if (!e.target.files.length) return;
     await S.agregarArchivos([...e.target.files]);

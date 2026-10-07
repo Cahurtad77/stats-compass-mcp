@@ -118,3 +118,100 @@ export async function probarClave() {
   const r = await client.messages.create({ model: MODELO, max_tokens: 64, output_config: { effort: 'low' }, messages: [{ role: 'user', content: 'Responde solo: OK' }] });
   return r.content.some((b) => b.type === 'text');
 }
+
+// ---------- Extractos bancarios ----------
+const ESQUEMA_EXTRACTO = {
+  type: 'object', additionalProperties: false,
+  required: ['es_extracto', 'banco', 'tipo_cuenta', 'ultimos4', 'periodo_desde', 'periodo_hasta', 'saldo_inicial', 'saldo_final', 'movimientos', 'observaciones'],
+  properties: {
+    es_extracto: { type: 'boolean' },
+    banco: { type: 'string' },
+    tipo_cuenta: { type: 'string', enum: ['ahorros', 'corriente', 'tarjeta_credito', 'billetera', 'otro'] },
+    ultimos4: { type: 'string', description: 'Últimos 4 dígitos de la cuenta o tarjeta, o cadena vacía' },
+    periodo_desde: { type: 'string', description: 'AAAA-MM-DD o vacío' },
+    periodo_hasta: { type: 'string', description: 'AAAA-MM-DD o vacío' },
+    saldo_inicial: { anyOf: [{ type: 'number' }, { type: 'null' }], description: 'Saldo anterior. En tarjetas: deuda anterior (positiva)' },
+    saldo_final: { anyOf: [{ type: 'number' }, { type: 'null' }], description: 'Saldo final. En tarjetas: deuda total (positiva)' },
+    movimientos: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false, required: ['fecha', 'descripcion', 'valor'],
+        properties: {
+          fecha: { type: 'string', description: 'AAAA-MM-DD' },
+          descripcion: { type: 'string' },
+          valor: { type: 'number', description: 'Negativo si el dinero sale o la deuda aumenta (compras, retiros, cuotas, intereses, 4x1000). Positivo si entra o la deuda baja (consignaciones, nómina, pagos a la tarjeta).' },
+        },
+      },
+    },
+    observaciones: { type: 'string' },
+  },
+};
+
+const SISTEMA_EXTRACTO = `Transcribes extractos bancarios colombianos (Bancolombia, Davivienda, BBVA, Banco de Bogotá, Nequi, Daviplata, tarjetas de crédito, etc.) a datos estructurados.
+- Incluye TODOS los movimientos del período, uno por línea del extracto, sin omitir ni resumir; también intereses, cuotas de manejo, 4x1000 y comisiones.
+- Valores en formato colombiano: "1.234.567,89" = 1234567.89.
+- En tarjetas de crédito: las compras y cargos son negativos; los pagos y abonos son positivos. Si una compra a cuotas aparece como cuota mensual, registra la cuota del período.
+- No incluyas filas de totales, subtotales ni saldos como movimientos.
+- Si el documento no es un extracto, es_extracto = false y movimientos vacío.`;
+
+async function crear(client, Anthropic, params, { streaming = false } = {}) {
+  try {
+    if (streaming) return await client.beta.messages.stream(params).finalMessage();
+    return await client.beta.messages.create(params);
+  } catch (e) {
+    if (e instanceof Anthropic.AuthenticationError) throw new Error('La clave de API no es válida. Revísala en Lectura con IA.');
+    if (e instanceof Anthropic.PermissionDeniedError) throw new Error('La clave no tiene permiso para este modelo o la cuenta no tiene saldo.');
+    if (e instanceof Anthropic.RateLimitError) throw new Error('Demasiadas solicitudes seguidas. Espera un minuto y continúa.');
+    if (e instanceof Anthropic.BadRequestError) throw new Error(`La API rechazó la solicitud: ${e.message}`);
+    if (e instanceof Anthropic.APIConnectionError) throw new Error('Sin conexión con la API de Claude. Revisa tu internet.');
+    if (e instanceof Anthropic.APIError) throw new Error(`Error de la API (${e.status ?? '?'}): ${e.message}`);
+    throw e;
+  }
+}
+
+function jsonDe(respuesta) {
+  if (respuesta.stop_reason === 'refusal') throw new Error('El modelo no pudo procesar este archivo.');
+  if (respuesta.stop_reason === 'max_tokens') throw new Error('El extracto es demasiado largo para leerlo de una vez: divídelo por meses.');
+  const texto = respuesta.content.find((b) => b.type === 'text')?.text;
+  if (!texto) throw new Error('La respuesta no trajo datos.');
+  try { return JSON.parse(texto); } catch { throw new Error('No se pudo interpretar la respuesta del modelo.'); }
+}
+
+export async function leerExtracto(blob) {
+  const { Anthropic, client } = await cliente();
+  const preparado = await prepararImagen(blob);
+  const datos = await aBase64(preparado);
+  const bloque = preparado.type === 'application/pdf'
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: datos } }
+    : { type: 'image', source: { type: 'base64', media_type: TIPOS_IMAGEN.includes(preparado.type) ? preparado.type : 'image/jpeg', data: datos } };
+  const r = await crear(client, Anthropic, {
+    model: MODELO, max_tokens: 64000, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
+    system: SISTEMA_EXTRACTO,
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: ESQUEMA_EXTRACTO } },
+    messages: [{ role: 'user', content: [bloque, { type: 'text', text: 'Transcribe este extracto.' }] }],
+  }, { streaming: true });
+  return { ...jsonDe(r), uso: r.usage };
+}
+
+// Sugiere rubro para grupos de comercios (solo texto: barato). grupos: [{ clave, ejemplo, signo, n, total }]
+export async function clasificarGrupos(grupos, { cuentas, historial = [] }) {
+  const { Anthropic, client } = await cliente();
+  const rubros = cuentas.filter((c) => c.activa && c.tipo !== 'patrimonio');
+  const esquema = {
+    type: 'object', additionalProperties: false, required: ['grupos'],
+    properties: { grupos: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['clave', 'rubro', 'confianza'],
+      properties: { clave: { type: 'string' }, rubro: { type: 'string', enum: rubros.map((c) => c.id) }, confianza: { type: 'string', enum: ['alta', 'media', 'baja'] } } } } },
+  };
+  const lista = grupos.map((g) => `- clave: ${g.clave} | ejemplo: "${g.ejemplo}" | ${g.signo > 0 ? 'ENTRADA de dinero' : 'SALIDA de dinero'} | ${g.n} movimientos | total ${Math.round(g.total / 100)} COP`).join('\n');
+  const r = await crear(client, Anthropic, {
+    model: MODELO, max_tokens: 16000, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
+    system: `${SISTEMA}\nAhora clasificas grupos de movimientos de extractos bancarios por comercio. Para salidas usa rubros de gasto, o una cuenta propia (activo/pasivo) si es un traslado, ahorro, inversión o pago de tarjeta. Para entradas usa rubros de ingreso o una cuenta propia si es un traslado. Usa confianza "baja" cuando la descripción sea ambigua (por ejemplo transferencias a personas).`,
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: esquema } },
+    messages: [{ role: 'user', content: [
+      'Rubros disponibles (id: nombre, tipo):', ...rubros.map((c) => `- ${c.id}: ${c.nombre} (${c.tipo})`),
+      historial.length ? `\nPreferencias del usuario (comercio → rubro):\n${historial.map((h) => `- ${h.tercero} → ${h.cuenta}`).join('\n')}` : '',
+      `\nGrupos a clasificar:\n${lista}`,
+    ].join('\n') }],
+  });
+  return { ...jsonDe(r), uso: r.usage };
+}

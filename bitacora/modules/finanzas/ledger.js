@@ -268,6 +268,9 @@ export function parseCSV(texto) {
 
 export function normalizarFecha(txt) {
   const t = String(txt).trim();
+  if (/^\d{5}(\.\d+)?$/.test(t) && +t > 30000 && +t < 80000) { // fecha serial de Excel
+    return new Date(Date.UTC(1899, 11, 30) + Math.floor(+t) * 86400000).toISOString().slice(0, 10);
+  }
   let m = t.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
   m = t.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/); // DD/MM/AAAA (uso colombiano)
@@ -276,9 +279,12 @@ export function normalizarFecha(txt) {
 }
 
 // Reglas de categorización tipo Firefly III: [{ contiene: 'EXITO', cuenta: 'alimentacion' }]
+// Una regla puede tener `clave` (comercio exacto, creada al clasificar extractos) o `contiene` (texto libre).
 export function categorizar(descripcion, reglas, porDefecto) {
-  const d = descripcion.toUpperCase();
-  const r = reglas.find((x) => x.contiene && d.includes(x.contiene.toUpperCase()));
+  const d = normalizarTexto(descripcion);
+  let clave = null;
+  const r = reglas.find((x) => (x.clave && (clave ??= claveComercio(descripcion)) === x.clave)
+    || (x.contiene && d.includes(normalizarTexto(x.contiene))));
   return r ? r.cuenta : porDefecto;
 }
 
@@ -329,16 +335,22 @@ const normalizarTexto = (t) => String(t || '').toUpperCase().normalize('NFD').re
 
 // Orden: reglas explícitas > historial del mismo tercero/comercio > palabras clave comunes > null.
 const PALABRAS = [
-  [/EXITO|CARULLA|D1|ARA|JUMBO|OLIMPICA|MERCADO|SUPERMERCADO|PANADERIA|RAPPI/, 'alimentacion'],
-  [/EPM|ENEL|CODENSA|GAS NATURAL|VANTI|ACUEDUCTO|CLARO|MOVISTAR|TIGO|ETB|ARRIENDO|ADMINISTRACION/, 'vivienda'],
-  [/TERPEL|PRIMAX|ESSO|GASOLINA|PEAJE|PARQUEADERO|UBER|DIDI|CABIFY|METRO|TAXI/, 'transporte'],
-  [/DROGUERIA|FARMACIA|CRUZ VERDE|COLSUBSIDIO|EPS|CLINICA|MEDIC|LABORATORIO|ODONTO/, 'salud'],
-  [/COLEGIO|UNIVERSIDAD|MATRICULA|LIBRERIA|CURSO|PANAMERICANA/, 'educacion'],
-  [/NETFLIX|SPOTIFY|DISNEY|HBO|MAX|AMAZON PRIME|YOUTUBE|APPLE|GOOGLE ONE|ICLOUD|CHATGPT|CLAUDE/, 'suscripciones'],
-  [/AVIANCA|LATAM|WINGO|HOTEL|AIRBNB|BOOKING|DESPEGAR/, 'vacaciones'],
-  [/CINE|CINEMARK|PROCINAL|RESTAURANTE|BAR |TEATRO/, 'ocio'],
-  [/4X1000|GMF|CUOTA DE MANEJO|INTERES|COMISION/, 'financieros'],
-  [/DIAN|PREDIAL|IMPUESTO|VEHICULAR/, 'impuestos'],
+  [/\b(?:EXITO|CARULLA|D1|ARA|JUMBO|OLIMPICA|MERCADO|SUPERMERCADO|PANADERIA|RAPPI)\b/, 'alimentacion'],
+  [/\b(?:EPM|ENEL|CODENSA|GAS NATURAL|VANTI|ACUEDUCTO|CLARO|MOVISTAR|TIGO|ETB|ARRIENDO|ADMINISTRACION)\b/, 'vivienda'],
+  [/\b(?:TERPEL|PRIMAX|ESSO|GASOLINA|PEAJE|PARQUEADERO\w*|UBER|DIDI|CABIFY|METRO|TAXI)\b/, 'transporte'],
+  [/\b(?:DROGUERIA|FARMACIA|CRUZ VERDE|COLSUBSIDIO|EPS|CLINICA|MEDIC\w*|LABORATORIO\w*|ODONTO\w*)\b/, 'salud'],
+  [/\b(?:COLEGIO|UNIVERSIDAD|MATRICULA|LIBRERIA|CURSO|PANAMERICANA)\b/, 'educacion'],
+  [/\b(?:NETFLIX|SPOTIFY|DISNEY|HBO|MAX|AMAZON PRIME|YOUTUBE|APPLE|GOOGLE ONE|ICLOUD|CHATGPT|CLAUDE)\b/, 'suscripciones'],
+  [/\b(?:AVIANCA|LATAM|WINGO|HOTEL\w*|AIRBNB|BOOKING|DESPEGAR)\b/, 'vacaciones'],
+  [/\b(?:CINE|CINEMARK|PROCINAL|RESTAURANTE\w*|BAR|TEATRO)\b/, 'ocio'],
+  [/\b(?:4X1000|GMF|CUOTA DE MANEJO|INTERES\w*|COMISION\w*)\b/, 'financieros'],
+  [/\b(?:DIAN|PREDIAL|IMPUESTO\w*|VEHICULAR)\b/, 'impuestos'],
+];
+
+const PALABRAS_INGRESO = [
+  [/\b(?:NOMINA|SALARIO|SUELDO|PRIMA DE SERVICIOS|CESANTIAS|VACACIONES PAGADAS)\b/, 'salario'],
+  [/\b(?:HONORARIOS|CUENTA DE COBRO)\b/, 'honorarios'],
+  [/\b(?:RENDIMIENTO|INTERESES (A FAVOR|GANADOS|AHORRO)|INTERES CDT)\b/, 'rendimientos'],
 ];
 
 export function sugerirCuenta({ descripcion = '', tercero = '', tipo = 'gasto' }, asientos = [], reglas = [], cuentas = []) {
@@ -358,11 +370,9 @@ export function sugerirCuenta({ descripcion = '', tercero = '', tipo = 'gasto' }
     const mejor = Object.entries(conteo).sort((x, y) => y[1] - x[1])[0];
     if (mejor) return { cuenta: mejor[0], motivo: 'historial' };
   }
-  if (buscado === 'gasto') {
-    const n = normalizarTexto(texto);
-    const hit = PALABRAS.find(([re]) => re.test(n));
-    if (hit && valida(hit[1])) return { cuenta: hit[1], motivo: 'palabra clave' };
-  }
+  const n = normalizarTexto(texto);
+  const hit = (buscado === 'gasto' ? PALABRAS : PALABRAS_INGRESO).find(([re]) => re.test(n));
+  if (hit && valida(hit[1])) return { cuenta: hit[1], motivo: 'palabra clave' };
   return { cuenta: null, motivo: null };
 }
 
@@ -499,4 +509,125 @@ export function proyectarFlujo(recurrentes, cuentas, saldoInicial, hoy, meses = 
 function L_ultimaAntes(r, hoy) {
   const pasadas = fechasPendientes({ ...r, ultima: undefined }, hoy);
   return pasadas.at(-1);
+}
+
+// ---------- Importación de extractos (zona de revisión) ----------
+// Una "fila" es un movimiento de extracto aún no contabilizado:
+// { id, lote, cuenta, fecha, descripcion, monto (negativo = sale de la cuenta del extracto), clave, rubro, motivo, estado, parId, asientoId }
+
+const RUIDO = /\b(COMPRA|COMPRAS|PAGO|PAGOS|POS|EN|DE|LA|EL|REF|REFERENCIA|NRO|NO|TRANSF|TRANSFERENCIA|ABONO|CARGO|DEBITO|CREDITO|TARJETA|TRX|TRANS|CO|COL|BOGOTA|MEDELLIN|CALI|COLOMBIA|SAS|S A|LTDA|WWW|COM|APP|VISA|MASTERCARD|MC|QR|PSE)\b/g;
+
+// Clave estable del comercio: sin números, referencias ni palabras de relleno ("COMPRA EN RAPPI*7781 BOGOTA" → "RAPPI").
+export function claveComercio(descripcion) {
+  const n = normalizarTexto(descripcion).replace(/\d+/g, ' ').replace(RUIDO, ' ').replace(/\b[A-Z]\b/g, ' ').replace(/\s+/g, ' ').trim();
+  return n.split(' ').slice(0, 3).join(' ') || normalizarTexto(descripcion).slice(0, 20) || 'SIN DESCRIPCION';
+}
+
+const claveFila = (f) => `${f.cuenta}|${f.fecha}|${f.monto}|${normalizarTexto(f.descripcion)}`;
+
+const diasEntre = (a, b) => Math.abs((new Date(`${a}T00:00:00Z`) - new Date(`${b}T00:00:00Z`)) / 86400000);
+
+// Marca duplicados: (1) el mismo movimiento ya vino en otro extracto (extractos que se solapan);
+// (2) posible duplicado de un movimiento registrado a mano o desde un soporte (misma cuenta y valor, ±3 días).
+export function marcarDuplicados(nuevas, existentes, asientos) {
+  const previas = {};
+  for (const f of existentes) previas[claveFila(f)] = (previas[claveFila(f)] || 0) + 1; // incluye las descartadas: ya se revisaron
+  for (const a of asientos) if (a.lote) for (const p of a.partidas) {
+    const k = `${p.cuenta}|${a.fecha}|${p.monto}|${normalizarTexto(a.descripcion)}`;
+    previas[k] = (previas[k] || 0) + 1;
+  }
+  const manuales = asientos.filter((a) => !a.lote && a.tipo !== 'apertura');
+  const usados = new Set();
+  return nuevas.map((f) => {
+    const k = claveFila(f);
+    if (previas[k] > 0) { previas[k]--; return { ...f, estado: 'duplicada' }; }
+    const gemelo = manuales.find((a) => !usados.has(a.id) && diasEntre(a.fecha, f.fecha) <= 3 && a.partidas.some((p) => p.cuenta === f.cuenta && p.monto === f.monto));
+    if (gemelo) { usados.add(gemelo.id); return { ...f, estado: 'posible_duplicada', asientoId: gemelo.id }; }
+    return f;
+  });
+}
+
+// Empareja transferencias entre cuentas propias: mismo valor con signo contrario en dos cuentas, ±3 días
+// (p. ej. "PAGO TARJETA" en el extracto de ahorros y "ABONO" en el de la tarjeta).
+export function emparejarTransferencias(filas) {
+  const libres = filas.filter((f) => f.estado === 'pendiente' && !f.parId);
+  const salida = new Map(filas.map((f) => [f.id, f]));
+  for (const f of libres) {
+    if (f.monto >= 0 || salida.get(f.id).parId) continue;
+    const par = libres.find((g) => g.cuenta !== f.cuenta && g.monto === -f.monto && !salida.get(g.id).parId && diasEntre(g.fecha, f.fecha) <= 3);
+    if (par) {
+      salida.set(f.id, { ...salida.get(f.id), estado: 'transferencia', parId: par.id, rubro: par.cuenta, motivo: 'transferencia entre tus cuentas' });
+      salida.set(par.id, { ...salida.get(par.id), estado: 'transferencia', parId: f.id, rubro: f.cuenta, motivo: 'transferencia entre tus cuentas' });
+    }
+  }
+  return filas.map((f) => salida.get(f.id));
+}
+
+// Grupos por comercio para clasificar muchos movimientos de una vez. Primero los que no tienen rubro y más pesan.
+export function agruparPorComercio(filas) {
+  const grupos = {};
+  for (const f of filas) {
+    if (f.estado !== 'pendiente') continue;
+    const g = (grupos[f.clave] ||= { clave: f.clave, filas: [], total: 0, entradas: 0, ejemplo: f.descripcion });
+    g.filas.push(f); g.total += Math.abs(f.monto); if (f.monto > 0) g.entradas++;
+  }
+  return Object.values(grupos).map((g) => {
+    const rubros = {};
+    for (const f of g.filas) if (f.rubro) rubros[f.rubro] = (rubros[f.rubro] || 0) + 1;
+    const [rubro] = Object.entries(rubros).sort((a, b) => b[1] - a[1])[0] || [null];
+    return { ...g, signo: g.entradas > g.filas.length / 2 ? 1 : -1, rubro, sinRubro: g.filas.filter((f) => !f.rubro).length };
+  }).sort((a, b) => (b.sinRubro > 0) - (a.sinRubro > 0) || b.total - a.total);
+}
+
+// Sugerencia automática para filas sin rubro (reglas > historial > palabras clave).
+export function autoclasificar(filas, asientos, reglas, cuentas) {
+  return filas.map((f) => {
+    if (f.estado !== 'pendiente' || f.rubro) return f;
+    const tipo = f.monto > 0 ? 'ingreso' : 'gasto';
+    const s = sugerirCuenta({ descripcion: f.descripcion, tipo }, asientos, reglas, cuentas);
+    if (s.cuenta) return { ...f, rubro: s.cuenta, motivo: s.motivo };
+    if (tipo === 'gasto' && /PAGO.*(TARJETA|TC)|ABONO.*TARJETA/.test(normalizarTexto(f.descripcion)) && f.cuenta !== 'tc') return { ...f, rubro: 'tc', motivo: 'pago de tarjeta' };
+    return f;
+  });
+}
+
+// Conciliación: ¿cuadran saldo inicial + movimientos = saldo final? En tarjetas el saldo es deuda (signo contrario).
+export function conciliar({ saldoInicial, saldoFinal, movimientos, esTarjeta = false }) {
+  if (!Number.isFinite(saldoInicial) || !Number.isFinite(saldoFinal)) return { cuadra: null, diferencia: null };
+  const suma = movimientos.reduce((t, m) => t + m, 0);
+  const esperado = esTarjeta ? saldoInicial - suma : saldoInicial + suma;
+  const diferencia = saldoFinal - esperado;
+  return { cuadra: Math.abs(diferencia) < 100, diferencia }; // tolerancia de $1
+}
+
+// Fila clasificada → asiento. El rubro puede ser gasto, ingreso o una cuenta propia (transferencia).
+export function filaAAsiento(f, cuentas) {
+  const tipoRubro = cuentas.find((c) => c.id === f.rubro)?.tipo;
+  const tipo = tipoRubro === 'gasto' ? 'gasto' : tipoRubro === 'ingreso' ? 'ingreso' : 'transferencia';
+  return {
+    fecha: f.fecha, descripcion: f.descripcion, tercero: '', tipo, lote: f.lote, etiquetas: ['importado'],
+    partidas: [{ cuenta: f.cuenta, monto: f.monto }, { cuenta: f.rubro, monto: -f.monto }],
+  };
+}
+
+// Filas tabulares (CSV/Excel) → filas de importación. Admite una columna de valor con signo
+// o dos columnas separadas de débitos y créditos.
+export function tablaAFilas(filas, { colFecha, colDescripcion, colMonto = -1, colDebito = -1, colCredito = -1, cuenta, lote, encabezado = true, invertir = false }) {
+  const datos = encabezado ? filas.slice(1) : filas;
+  const salida = [], errores = [];
+  datos.forEach((f, i) => {
+    const fecha = normalizarFecha(f[colFecha] || '');
+    let monto;
+    if (colMonto >= 0) monto = aCentavos(f[colMonto] || '');
+    else {
+      const deb = colDebito >= 0 && String(f[colDebito] || '').trim() ? Math.abs(aCentavos(f[colDebito])) : 0;
+      const cre = colCredito >= 0 && String(f[colCredito] || '').trim() ? Math.abs(aCentavos(f[colCredito])) : 0;
+      monto = cre - deb;
+    }
+    if (invertir) monto = -monto;
+    const descripcion = String(f[colDescripcion] || '').trim();
+    if (!fecha || !Number.isFinite(monto) || monto === 0) { errores.push(i + (encabezado ? 2 : 1)); return; }
+    salida.push({ lote, cuenta, fecha, descripcion, monto, clave: claveComercio(descripcion), rubro: null, motivo: null, estado: 'pendiente' });
+  });
+  return { filas: salida, errores };
 }

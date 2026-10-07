@@ -3,8 +3,8 @@
 // (navegación privada estricta), se usa memoria y se avisa en la interfaz.
 
 const NOMBRE = 'bitacora';
-const VERSION = 2;
-export const ALMACENES = ['cuentas', 'asientos', 'presupuestos', 'recurrentes', 'reglas', 'ajustes', 'soportes', 'metas'];
+const VERSION = 3;
+export const ALMACENES = ['cuentas', 'asientos', 'presupuestos', 'recurrentes', 'reglas', 'ajustes', 'soportes', 'metas', 'importacion', 'lotes'];
 // Ajustes sensibles que nunca salen en un respaldo.
 const PRIVADOS = new Set(['ia_clave']);
 
@@ -58,6 +58,11 @@ export async function guardarVarios(almacen, lista) {
   if (!persistente) docs.forEach((d) => memoria[almacen].set(d.id, d));
   else await tx(almacen, 'readwrite', (s) => docs.forEach((d) => s.put(d)));
   return docs;
+}
+
+export async function borrarVarios(almacen, ids) {
+  if (!persistente) ids.forEach((id) => memoria[almacen].delete(id));
+  else await tx(almacen, 'readwrite', (s) => ids.forEach((id) => s.delete(id)));
 }
 
 export async function borrar(almacen, id) {
