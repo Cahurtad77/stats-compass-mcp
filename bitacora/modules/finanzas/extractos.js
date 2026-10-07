@@ -4,7 +4,7 @@ import * as L from './ledger.js';
 import * as DB from '../../core/db.js';
 import * as IA from './ia.js';
 import { leerXlsx } from '../../core/xlsx.js';
-import { h, $, aviso, leerArchivo, formularioAObjeto } from '../../core/ui.js';
+import { h, $, aviso, leerArchivo, formularioAObjeto, confirmar, preguntar } from '../../core/ui.js';
 
 const fmt = (c) => L.formatoMoneda(c);
 const cola = { tabulares: [], ia: [], procesando: null, errores: [] }; // vive mientras la página esté abierta
@@ -186,7 +186,7 @@ export function conectarExtractos(el, estado, refrescar, { filas, lotes }) {
     const lote = lotes.find((l) => l.id === s.dataset.cuentaLote);
     let cuenta = s.value;
     if (cuenta === '__nueva') {
-      const nombre = prompt('Nombre de la cuenta (p. ej. "Davivienda ahorros ****1234")', `${lote.banco || ''} ${lote.ultimos4 ? `****${lote.ultimos4}` : ''}`.trim());
+      const nombre = await preguntar('Nombre de la cuenta (p. ej. "Davivienda ahorros ****1234")', `${lote.banco || ''} ${lote.ultimos4 ? `****${lote.ultimos4}` : ''}`.trim());
       if (!nombre) return refrescar();
       const tipo = lote.tipoCuenta === 'tarjeta_credito' ? 'pasivo' : 'activo';
       const n = estado.cuentas.filter((c) => c.tipo === tipo).length;
@@ -226,7 +226,7 @@ export function conectarExtractos(el, estado, refrescar, { filas, lotes }) {
     else if (d.borrarLote) {
       const lote = lotes.find((l) => l.id === d.borrarLote);
       const asientos = estado.asientos.filter((a) => a.lote === lote.id);
-      if (!confirm(`¿Deshacer “${lote.archivo}”? Se quitan sus ${filas.filter((f) => f.lote === lote.id).length} movimientos de la revisión${asientos.length ? ` y ${asientos.length} asientos ya contabilizados` : ''}.`)) return;
+      if (!await confirmar(`¿Deshacer “${lote.archivo}”? Se quitan sus ${filas.filter((f) => f.lote === lote.id).length} movimientos de la revisión${asientos.length ? ` y ${asientos.length} asientos ya contabilizados` : ''}.`)) return;
       await DB.borrarVarios('asientos', asientos.map((a) => a.id));
       await DB.borrarVarios('importacion', filas.filter((f) => f.lote === lote.id).map((f) => f.id));
       await DB.borrar('lotes', lote.id);

@@ -1,7 +1,7 @@
 // Shell de Bitácora: registro de módulos + enrutador por hash (#/modulo/seccion).
 // Cada módulo expone { id, nombre, icono, descripcion, estado, secciones?, montar(el, seccion), tarjeta?() }.
 import { abrir, persistente } from './db.js';
-import { h, html, $, $$ } from './ui.js';
+import { h, html, $, $$, rutaActual, navegar, sincronizarDesdeURL } from './ui.js';
 import finanzas from '../modules/finanzas/finanzas.js';
 
 // Hoja de ruta: módulos planeados (ver docs/investigacion.md). Se activan uno a uno.
@@ -43,7 +43,7 @@ function proximo(el, m) {
 }
 
 async function enrutar() {
-  const [, id, seccion] = location.hash.replace(/^#/, '').split('/');
+  const [, id, seccion] = rutaActual().replace(/^#/, '').split('/');
   $('#nav').innerHTML = navegacion(id);
   const el = $('#contenido');
   el.onclick = null;
@@ -63,7 +63,15 @@ async function enrutar() {
 async function arrancar() {
   await abrir();
   for (const m of MODULOS) if (m.iniciar) await m.iniciar();
-  window.addEventListener('hashchange', enrutar);
+  window.addEventListener('bitacora:ruta', enrutar);
+  window.addEventListener('hashchange', () => { if (sincronizarDesdeURL()) enrutar(); });
+  // Enlaces internos (#/modulo/seccion) se resuelven aquí, sin depender del hash del marco.
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href^="#/"]');
+    if (!a || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    navegar(a.getAttribute('href'));
+  });
   $('#btn-menu').addEventListener('click', () => $('body').classList.toggle('menu-abierto'));
   $$('[data-tema]').forEach((b) => b.addEventListener('click', () => {
     const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';

@@ -13,7 +13,8 @@ const CACHE_COMPARTIDOS = 'bitacora-compartidos';
 // Mueve lo que llegó por "Compartir" (guardado por el service worker en Cache Storage) a IndexedDB.
 export async function importarCompartidos() {
   if (!('caches' in window)) return 0;
-  const cache = await caches.open(CACHE_COMPARTIDOS);
+  let cache;
+  try { cache = await caches.open(CACHE_COMPARTIDOS); } catch { return 0; } // marcos aislados no tienen Cache Storage
   const claves = await cache.keys();
   for (const req of claves) {
     const r = await cache.match(req);

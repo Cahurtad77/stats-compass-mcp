@@ -188,3 +188,8 @@ textarea { resize: vertical; }
   .lotes select { max-width: 160px; }
   .panel:has(.lotes) { overflow-x: auto; }
 }
+
+/* Diálogos propios */
+.dialogo-fondo { position: fixed; inset: 0; background: rgb(0 0 0 / .45); display: grid; place-items: center; z-index: 60; padding: 16px; }
+.dialogo { background: var(--superficie); color: var(--texto); border: 1px solid var(--borde); border-radius: var(--radio); padding: 1.2rem; max-width: 440px; width: 100%; box-shadow: 0 10px 40px rgb(0 0 0 / .25); display: grid; gap: .8rem; }
+.dialogo p { margin: 0; }

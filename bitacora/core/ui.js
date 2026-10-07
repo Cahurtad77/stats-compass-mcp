@@ -75,3 +75,41 @@ export function barraProgreso(uso) {
   const estado = uso > 1 ? 'mal' : uso > 0.85 ? 'alerta' : 'ok';
   return h`<div class="progreso" role="progressbar" aria-valuenow="${Math.round(uso * 100)}" aria-valuemin="0" aria-valuemax="100"><span class="p-${estado}" style="width:${pct}%"></span></div>`;
 }
+
+// ---------- Navegación interna ----------
+// No depende de location.hash: dentro de marcos aislados (p. ej. la vista previa en claude.ai) el hash
+// puede no cambiar. La ruta vive aquí y se refleja en la URL cuando el navegador lo permite.
+let rutaInterna = (() => { try { return location.hash || '#/'; } catch { return '#/'; } })();
+export const rutaActual = () => rutaInterna;
+export function navegar(hash) {
+  rutaInterna = hash || '#/';
+  try { if (location.hash !== rutaInterna) history.replaceState(null, '', rutaInterna); } catch { /* marco aislado */ }
+  window.dispatchEvent(new CustomEvent('bitacora:ruta'));
+}
+export function sincronizarDesdeURL() {
+  try { if (location.hash && location.hash !== rutaInterna) { rutaInterna = location.hash; return true; } } catch { /* sin acceso */ }
+  return false;
+}
+
+// ---------- Diálogos dentro de la página (confirm/prompt nativos están bloqueados en algunos marcos) ----------
+function dialogo({ mensaje, conCampo = false, valor = '', aceptar = 'Aceptar', peligro = false }) {
+  return new Promise((resolver) => {
+    const fondo = document.createElement('div');
+    fondo.className = 'dialogo-fondo';
+    fondo.innerHTML = html`<div class="dialogo" role="dialog" aria-modal="true" aria-labelledby="dialogo-msg">
+      <p id="dialogo-msg">${mensaje}</p>
+      ${conCampo ? h`<input id="dialogo-campo" value="${valor}" aria-label="${mensaje}">` : ''}
+      <div class="acciones"><button class="${peligro ? 'btn-peligro' : 'btn'}" data-si>${aceptar}</button><button class="btn-sec" data-no>Cancelar</button></div></div>`;
+    const cerrar = (r) => { fondo.remove(); document.removeEventListener('keydown', teclas); resolver(r); };
+    const teclas = (e) => { if (e.key === 'Escape') cerrar(conCampo ? null : false); if (e.key === 'Enter' && conCampo) cerrar(fondo.querySelector('input').value); };
+    fondo.addEventListener('click', (e) => {
+      if (e.target.closest('[data-si]')) cerrar(conCampo ? fondo.querySelector('input').value : true);
+      else if (e.target.closest('[data-no]') || e.target === fondo) cerrar(conCampo ? null : false);
+    });
+    document.addEventListener('keydown', teclas);
+    document.body.appendChild(fondo);
+    (fondo.querySelector('input') || fondo.querySelector('[data-si]')).focus();
+  });
+}
+export const confirmar = (mensaje, opciones = {}) => dialogo({ mensaje, peligro: true, aceptar: 'Sí, continuar', ...opciones });
+export const preguntar = (mensaje, valor = '') => dialogo({ mensaje, conCampo: true, valor });

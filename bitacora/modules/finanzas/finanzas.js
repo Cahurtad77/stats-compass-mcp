@@ -1,7 +1,7 @@
 // Módulo Finanzas y Contabilidad: interfaz sobre el núcleo de partida doble (ledger.js).
 import * as L from './ledger.js';
 import * as DB from '../../core/db.js';
-import { h, html, $, $$, aviso, descargar, leerArchivo, hoyISO, formularioAObjeto, graficoMensual, barraProgreso } from '../../core/ui.js';
+import { h, html, $, $$, aviso, descargar, leerArchivo, hoyISO, formularioAObjeto, graficoMensual, barraProgreso, navegar, confirmar } from '../../core/ui.js';
 import * as S from './secciones.js';
 import * as IA from './ia.js';
 import * as X from './extractos.js';
@@ -407,7 +407,7 @@ async function montar(el, seccion = 'resumen') {
 
 function conectar(el, sec, refrescar, ctx) {
   $('#sel-mes', el)?.addEventListener('change', (e) => { estado.mes = e.target.value || estado.mes; refrescar(); });
-  $('#sel-anio', el)?.addEventListener('change', (e) => { location.hash = `#/finanzas/impuestos:${e.target.value}`; });
+  $('#sel-anio', el)?.addEventListener('change', (e) => { navegar(`#/finanzas/impuestos:${e.target.value}`); });
 
   const fMov = $('#f-mov', el);
   if (fMov) {
@@ -434,7 +434,7 @@ function conectar(el, sec, refrescar, ctx) {
       e.preventDefault();
       if (await guardarMovimiento(fMov)) {
         if (sec === 'bandeja') { soporteVisto = null; refrescar(); }
-        else if (fMov.id.value) location.hash = '#/finanzas/movimientos'; else refrescar();
+        else if (fMov.id.value) navegar('#/finanzas/movimientos'); else refrescar();
       }
     });
     const filtrar = () => {
@@ -447,14 +447,14 @@ function conectar(el, sec, refrescar, ctx) {
     const b = e.target.closest('button, [data-accion]');
     if (!b) return;
     const d = b.dataset;
-    if (d.editar) location.hash = `#/finanzas/movimientos:${d.editar}`;
+    if (d.editar) navegar(`#/finanzas/movimientos:${d.editar}`);
     else if (d.verSoporte) { soporteVisto = d.verSoporte; prellenado = null; refrescar(); }
     else if (d.leerIa) await leerConIA(b, d.leerIa, refrescar);
-    else if (d.descartar && confirm('¿Descartar este soporte?')) { const x = estado.soportes.find((y) => y.id === d.descartar); await DB.guardar('soportes', { ...x, estado: 'descartado' }); prellenado = null; refrescar(); }
+    else if (d.descartar && await confirmar('¿Descartar este soporte?')) { const x = estado.soportes.find((y) => y.id === d.descartar); await DB.guardar('soportes', { ...x, estado: 'descartado' }); prellenado = null; refrescar(); }
     else if (d.ignorarFuga) { await DB.fijarAjuste('fugas_ignoradas', [...ctx.ignoradas, d.ignorarFuga]); refrescar(); }
     else if ('restaurarFugas' in d) { await DB.fijarAjuste('fugas_ignoradas', []); refrescar(); }
     else if ('metasSugeridas' in d) { await DB.guardarVarios('metas', S.metasSugeridas(Number(hoyISO().slice(0, 4)))); aviso('Metas creadas: ajústalas a tu realidad'); refrescar(); }
-    else if (d.borrarMeta && confirm('¿Borrar esta meta? Los movimientos asociados se conservan.')) { await DB.borrar('metas', d.borrarMeta); refrescar(); }
+    else if (d.borrarMeta && await confirmar('¿Borrar esta meta? Los movimientos asociados se conservan.')) { await DB.borrar('metas', d.borrarMeta); refrescar(); }
     else if (d.resolver) { const a = estado.asientos.find((x) => x.id === d.resolver); await DB.guardar('asientos', { ...a, preguntaResuelta: true }); refrescar(); }
     else if (d.resolverGeneral) { await DB.fijarAjuste('contador_preguntas', ctx.preguntasGenerales.filter((_, i) => i !== Number(d.resolverGeneral))); refrescar(); }
     else if (d.paquete) await enviarAlContador(b, d.paquete, ctx);
@@ -466,8 +466,8 @@ function conectar(el, sec, refrescar, ctx) {
       b.disabled = true; b.textContent = 'Probando…';
       try { await IA.probarClave(); aviso('La clave funciona ✓'); } catch (err) { aviso(err.message, 'mal'); }
       b.disabled = false; b.textContent = 'Probar';
-    } else if ('borrarClave' in d && confirm('¿Borrar la clave de este dispositivo?')) { await DB.fijarAjuste('ia_clave', ''); refrescar(); }
-    else if (d.borrar && confirm('¿Borrar este movimiento?')) { await DB.borrar('asientos', d.borrar); aviso('Borrado'); refrescar(); }
+    } else if ('borrarClave' in d && await confirmar('¿Borrar la clave de este dispositivo?')) { await DB.fijarAjuste('ia_clave', ''); refrescar(); }
+    else if (d.borrar && await confirmar('¿Borrar este movimiento?')) { await DB.borrar('asientos', d.borrar); aviso('Borrado'); refrescar(); }
     else if (d.alternar) { const c = cuenta(d.alternar); await DB.guardar('cuentas', { ...c, activa: !c.activa }); refrescar(); }
     else if (d.borrarRec) { await DB.borrar('recurrentes', d.borrarRec); refrescar(); }
     else if (d.borrarRegla) { await DB.borrar('reglas', d.borrarRegla); refrescar(); }
@@ -479,7 +479,7 @@ function conectar(el, sec, refrescar, ctx) {
       aviso(`${fechas.length} movimiento(s) registrados`); refrescar();
     } else if (d.exportar) await exportar(d.exportar);
     else if (d.accion === 'demo') { await cargarDemo(); refrescar(); }
-    else if (d.accion === 'reiniciar' && confirm('Esto borra movimientos, presupuestos, recurrentes, reglas, soportes, metas y extractos. ¿Seguro? (Haz un respaldo antes)')) {
+    else if (d.accion === 'reiniciar' && await confirmar('Esto borra movimientos, presupuestos, recurrentes, reglas, soportes, metas y extractos. ¿Seguro? (Haz un respaldo antes)')) {
       for (const a of ['asientos', 'presupuestos', 'recurrentes', 'reglas', 'soportes', 'metas', 'importacion', 'lotes']) await DB.vaciar(a);
       aviso('Datos borrados'); refrescar();
     }
@@ -552,10 +552,10 @@ function conectar(el, sec, refrescar, ctx) {
     await DB.fijarAjuste(`contador_docs_${ctx.anio}`, c.checked ? [...new Set([...ctx.docs, i])] : ctx.docs.filter((x) => x !== i));
     refrescar();
   }));
-  $('#sel-anio-cont', el)?.addEventListener('change', (e) => { location.hash = `#/finanzas/contador:${e.target.value}`; });
+  $('#sel-anio-cont', el)?.addEventListener('change', (e) => { navegar(`#/finanzas/contador:${e.target.value}`); });
   $('#arch-json', el)?.addEventListener('change', async (e) => {
     const archivo = e.target.files[0];
-    if (!archivo || !confirm('Restaurar reemplaza TODOS los datos actuales. ¿Continuar?')) return;
+    if (!archivo || !await confirmar('Restaurar reemplaza TODOS los datos actuales. ¿Continuar?')) return;
     try { await DB.restaurar(JSON.parse(await leerArchivo(archivo))); aviso('Respaldo restaurado'); refrescar(); }
     catch (err) { aviso(err.message, 'mal'); }
   });

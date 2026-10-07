@@ -16,6 +16,8 @@ export async function abrir() {
   if (db) return db;
   try {
     db = await new Promise((ok, mal) => {
+      // Si el navegador no responde (marcos aislados, modo privado estricto), se usa memoria tras 3 s.
+      setTimeout(() => mal(new Error('IndexedDB no respondió')), 3000);
       const req = indexedDB.open(NOMBRE, VERSION);
       req.onupgradeneeded = () => {
         for (const a of ALMACENES) if (!req.result.objectStoreNames.contains(a)) {
@@ -28,6 +30,7 @@ export async function abrir() {
     });
   } catch {
     persistente = false;
+    db = null;
   }
   return db;
 }
