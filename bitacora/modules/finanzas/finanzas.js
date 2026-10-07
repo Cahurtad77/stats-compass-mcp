@@ -2,27 +2,34 @@
 import * as L from './ledger.js';
 import * as DB from '../../core/db.js';
 import { h, html, $, $$, aviso, descargar, leerArchivo, hoyISO, formularioAObjeto, graficoMensual, barraProgreso } from '../../core/ui.js';
+import * as S from './secciones.js';
+import * as IA from './ia.js';
 
 const SECCIONES = [
-  ['resumen', 'Resumen'], ['movimientos', 'Movimientos'], ['cuentas', 'Cuentas'], ['presupuesto', 'Presupuesto'],
-  ['recurrentes', 'Recurrentes'], ['impuestos', 'Impuestos'], ['datos', 'Importar / Exportar'],
+  ['resumen', 'Resumen'], ['bandeja', 'Bandeja'], ['movimientos', 'Movimientos'], ['fugas', 'Fugas'], ['metas', 'Metas'],
+  ['presupuesto', 'Presupuesto'], ['contador', 'Contador'], ['impuestos', 'Impuestos'], ['cuentas', 'Cuentas'],
+  ['recurrentes', 'Recurrentes'], ['datos', 'Importar / Exportar'],
 ];
 
-let estado = { cuentas: [], asientos: [], presupuestos: [], recurrentes: [], reglas: [], mes: hoyISO().slice(0, 7) };
+let estado = { cuentas: [], asientos: [], presupuestos: [], recurrentes: [], reglas: [], soportes: [], metas: [], mes: hoyISO().slice(0, 7) };
+let prellenado = null; // borrador del formulario (p. ej. lo que leyó la IA de un soporte)
+let soporteVisto = null;
 const fmt = (c) => L.formatoMoneda(c);
 const cuenta = (id) => estado.cuentas.find((c) => c.id === id);
 const nombreCuenta = (id) => cuenta(id)?.nombre || id;
 
 async function cargar() {
-  const [cuentas, asientos, presupuestos, recurrentes, reglas] = await Promise.all(
-    ['cuentas', 'asientos', 'presupuestos', 'recurrentes', 'reglas'].map((a) => DB.todos(a)));
-  Object.assign(estado, { cuentas: cuentas.sort((a, b) => a.codigo.localeCompare(b.codigo)), asientos, presupuestos, recurrentes, reglas });
+  const [cuentas, asientos, presupuestos, recurrentes, reglas, soportes, metas] = await Promise.all(
+    ['cuentas', 'asientos', 'presupuestos', 'recurrentes', 'reglas', 'soportes', 'metas'].map((a) => DB.todos(a)));
+  Object.assign(estado, { cuentas: cuentas.sort((a, b) => a.codigo.localeCompare(b.codigo)), asientos, presupuestos, recurrentes, reglas, soportes, metas });
 }
 
 const opcionesCuenta = (tipos, seleccion) => h`${tipos.map((t) => h`<optgroup label="${L.TIPOS[t].nombre}">
   ${estado.cuentas.filter((c) => c.tipo === t && c.activa).map((c) => h`<option value="${c.id}" ${c.id === seleccion ? 'selected' : ''}>${c.codigo} · ${c.nombre}</option>`)}
   </optgroup>`)}`;
 
+const soportesPendientes = () => estado.soportes.filter((s) => s.estado === 'pendiente').length;
+const opcionesMeta = (sel) => h`<option value="">— Ninguna —</option>${estado.metas.map((m) => h`<option value="${m.id}" ${m.id === sel ? 'selected' : ''}>${m.nombre}</option>`)}`;
 const recurrentesPendientes = () => estado.recurrentes.reduce((n, r) => n + L.fechasPendientes(r, hoyISO()).length, 0);
 
 // ---------- Resumen ----------
@@ -43,7 +50,11 @@ function vistaResumen() {
     <li>Define topes de gasto en <a href="#/finanzas/presupuesto">Presupuesto</a>.</li></ol>
     <p><button class="btn" data-accion="demo">Cargar datos de ejemplo</button></p></div>`;
 
+  const flujo = L.proyectarFlujo(estado.recurrentes, estado.cuentas, liquidez, hoyISO(), 3);
+  const fugas = L.detectarFugas(estado.asientos, estado.cuentas, hoyISO(), { recurrentesConocidos: estado.recurrentes.map((r) => r.plantilla.descripcion) });
+  const nSop = soportesPendientes();
   return h`
+    ${nSop ? h`<p class="alerta-caja">📥 Tienes ${nSop} soporte(s) en la bandeja por clasificar. <a href="#/finanzas/bandeja">Clasificar</a></p>` : ''}
     ${pend ? h`<p class="alerta-caja">Tienes ${pend} movimiento(s) recurrente(s) por registrar. <a href="#/finanzas/recurrentes">Revisar</a></p>` : ''}
     <section class="kpis">
       <div class="kpi"><span>Ingresos del mes</span><strong class="pos">${fmt(er.totalIngresos)}</strong></div>
@@ -65,6 +76,16 @@ function vistaResumen() {
         ${pres.length ? pres.slice(0, 6).map((p) => h`<div class="linea-pres"><div><span>${p.cuenta.nombre}</span>
           <span class="sutil">${fmt(p.gastado)} / ${fmt(p.presupuesto)}</span></div>${barraProgreso(p.uso)}</div>`)
         : h`<p class="sutil">Aún no defines presupuesto. <a href="#/finanzas/presupuesto">Crear</a></p>`}</section>
+    </div>
+    <div class="dos-columnas">
+      <section class="panel"><h2>Caja de los próximos 3 meses</h2>
+        ${estado.recurrentes.length ? h`<p>Saldo hoy en efectivo y bancos: <strong>${fmt(liquidez)}</strong>. Con tus recurrentes llegarías a <strong>${fmt(flujo.saldoFinal)}</strong>.</p>
+          ${flujo.minimo.saldo < 0 ? h`<p class="alerta-caja">El ${flujo.minimo.fecha} la caja quedaría en ${fmt(flujo.minimo.saldo)}. Anticipa ese pago o mueve ahorro.</p>`
+            : h`<p class="sutil">Punto más bajo: ${fmt(flujo.minimo.saldo)} el ${flujo.minimo.fecha}.</p>`}`
+        : h`<p class="sutil">Registra tus <a href="#/finanzas/recurrentes">recurrentes</a> (nómina, arriendo, colegio, apoyo a mamá) para proyectar la caja.</p>`}</section>
+      <section class="panel"><h2>Posibles fugas</h2>
+        ${fugas.length ? h`${fugas.slice(0, 3).map((f) => h`<p><strong>${f.titulo}</strong><br><span class="sutil">≈ ${fmt(f.impactoAnual)} al año</span></p>`)}
+          <a href="#/finanzas/fugas">Ver todas (${fugas.length})</a>` : h`<p class="sutil">Sin fugas detectadas por ahora.</p>`}</section>
     </div>`;
 }
 
@@ -78,6 +99,7 @@ function formularioMovimiento(editar) {
   const tasa = ret && bruto ? (ret.monto / Math.abs(bruto.monto)).toFixed(2) : '0.10';
   return h`<form id="f-mov" class="panel formulario" autocomplete="off">
     <input type="hidden" name="id" value="${a.id || ''}">
+    <input type="hidden" name="soporte" value="${a.soporteId || ''}">
     <div class="segmentado" role="radiogroup" aria-label="Tipo de movimiento">
       ${[['gasto', 'Gasto'], ['ingreso', 'Ingreso'], ['transferencia', 'Transferencia'], ['honorarios', 'Honorarios']].map(([v, t]) =>
         h`<label><input type="radio" name="tipo" value="${v}" ${tipo === v ? 'checked' : ''}><span>${t}</span></label>`)}
@@ -93,8 +115,11 @@ function formularioMovimiento(editar) {
         <select name="retencion">${[['0.10', '10 % (tarifa general honorarios)'], ['0.11', '11 % (contratos > 3.300 UVT en el año)'], ['0.00', 'Sin retención']].map(([v, t]) =>
           h`<option value="${v}" ${v === tasa ? 'selected' : ''}>${t}</option>`)}</select></label>
       <label data-solo="honorarios">Proyecto<input name="proyecto" placeholder="Estudio de demanda"></label>
-      <label class="ancho">Etiquetas<input name="etiquetas" placeholder="familia, viaje-2026" value="${(a.etiquetas || []).filter((e) => e !== 'importado').join(', ')}"></label>
+      <label class="ancho">Etiquetas<input name="etiquetas" placeholder="familia, parte:tiquetes" value="${(a.etiquetas || []).filter((e) => e !== 'importado' && !e.startsWith('meta:')).join(', ')}"></label>
+      <label>Meta<select name="meta">${opcionesMeta((a.etiquetas || []).find((e) => e.startsWith('meta:'))?.slice(5))}</select></label>
+      <label class="ancho">Pregunta para el contador<input name="pregunta" placeholder="¿Esto es deducible?" value="${a.pregunta || ''}"></label>
     </div>
+    <p class="sutil" id="sugerencia" aria-live="polite"></p>
     <datalist id="terceros">${[...new Set(estado.asientos.map((x) => x.tercero).filter(Boolean))].map((t) => h`<option value="${t}">`)}</datalist>
     <div class="acciones"><button class="btn">${a.id ? 'Guardar cambios' : 'Registrar'}</button>
       ${a.id ? h`<a class="btn-sec" href="#/finanzas/movimientos">Cancelar</a>` : ''}</div>
@@ -110,7 +135,7 @@ function ajustarFormulario(form, editar) {
     honorarios: [[], ['activo'], null, 'banco'],
   }[tipo];
   const sale = editar?.partidas.find((p) => p.monto < 0), entra = editar?.partidas.find((p) => p.monto > 0 && p.cuenta !== 'ret_favor');
-  const [p0, p1] = editar && editar.tipo === tipo ? [sale?.cuenta, entra?.cuenta] : [conf[2], conf[3]];
+  const [p0, p1] = editar && editar.tipo === tipo ? [sale?.cuenta ?? conf[2], entra?.cuenta ?? conf[3]] : [conf[2], conf[3]];
   form.origen.innerHTML = opcionesCuenta(conf[0], p0).html;
   form.destino.innerHTML = opcionesCuenta(conf[1], p1).html;
   $$('[data-solo]', form).forEach((el) => { el.hidden = !el.dataset.solo.split(' ').includes(tipo); });
@@ -160,6 +185,7 @@ async function guardarMovimiento(form) {
   const monto = L.aCentavos(d.monto);
   if (!(monto > 0)) return aviso('Escribe un valor mayor que cero.', 'mal');
   const etiquetas = d.etiquetas.split(',').map((x) => x.trim()).filter(Boolean);
+  if (d.meta) etiquetas.push(`meta:${d.meta}`);
   let asiento;
   if (d.tipo === 'honorarios') {
     asiento = L.honorariosAAsiento({ fecha: d.fecha, bruto: monto, tasaRetencion: Number(d.retencion), destino: d.destino, cliente: d.tercero, descripcion: d.descripcion, proyecto: d.proyecto });
@@ -170,7 +196,18 @@ async function guardarMovimiento(form) {
   }
   const errores = L.validarAsiento(asiento);
   if (errores.length) return aviso(errores[0], 'mal');
-  await DB.guardar('asientos', { ...asiento, id: d.id || undefined });
+  const previo = d.id ? estado.asientos.find((a) => a.id === d.id) : null;
+  const extra = {
+    soporteId: d.soporte || previo?.soporteId || undefined,
+    pregunta: d.pregunta.trim() || undefined,
+    preguntaResuelta: d.pregunta.trim() && d.pregunta.trim() === previo?.pregunta ? previo?.preguntaResuelta : undefined,
+  };
+  const guardado = await DB.guardar('asientos', { ...asiento, ...extra, id: d.id || undefined });
+  if (d.soporte) {
+    const sop = estado.soportes.find((x) => x.id === d.soporte);
+    if (sop) await DB.guardar('soportes', { ...sop, estado: 'registrado', asientoId: guardado.id });
+  }
+  prellenado = null;
   aviso(d.id ? 'Movimiento actualizado' : 'Movimiento registrado');
   return true;
 }
@@ -269,8 +306,16 @@ function vistaImpuestos(anio) {
 }
 
 // ---------- Datos ----------
-function vistaDatos() {
-  return h`<div class="dos-columnas">
+function vistaDatos(conIA) {
+  return h`<section class="panel" id="ia"><h2>✨ Lectura de soportes con IA</h2>
+    <p class="sutil">Lee fotos de facturas, recibos y comprobantes (monto, fecha, comercio, NIT) y sugiere el rubro. Usa la API de Claude (${IA.MODELO}):
+      la imagen viaja desde este dispositivo directamente a Anthropic. Costo aproximado: unos centavos de dólar por foto.
+      Crea la clave en <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> y ponle un <strong>límite de gasto mensual</strong>.
+      La clave se guarda solo en este navegador y no se incluye en los respaldos.</p>
+    ${conIA ? h`<p class="ok-caja">Lectura con IA activa.</p><div class="botonera"><button class="btn-sec" data-probar-clave>Probar</button><button class="btn-peligro" data-borrar-clave>Borrar clave</button></div>`
+      : h`<div class="formulario fila"><input type="password" id="ia-clave" placeholder="sk-ant-…" autocomplete="off" aria-label="Clave de API"><button class="btn" data-guardar-clave>Guardar</button></div>`}
+  </section>
+  <div class="dos-columnas">
     <section class="panel"><h2>Importar extracto bancario (CSV)</h2>
       <p class="sutil">Descarga el extracto desde tu banca en línea (CSV o Excel guardado como CSV). Valores negativos = salidas.</p>
       <input type="file" id="arch-csv" accept=".csv,.txt">
@@ -342,12 +387,23 @@ async function cargarDemo() {
 
 // ---------- Montaje y eventos ----------
 async function montar(el, seccion = 'resumen') {
+  if ((seccion || '').startsWith('bandeja')) await S.importarCompartidos();
   await cargar();
   const [sec, extra] = (seccion || 'resumen').split(':');
   const anio = Number(extra) || Number(estado.mes.slice(0, 4));
+  const conIA = !!(await DB.ajuste('ia_clave', ''));
+  const ignoradas = await DB.ajuste('fugas_ignoradas', []);
+  const docs = await DB.ajuste(`contador_docs_${anio}`, []);
+  const preguntasGenerales = await DB.ajuste('contador_preguntas', []);
+  const pendientes = estado.soportes.filter((x) => x.estado === 'pendiente');
+  const actual = pendientes.find((x) => x.id === soporteVisto) || pendientes[0];
+  if (sec === 'bandeja' && actual && prellenado?.soporteId !== actual.id) prellenado = { soporteId: actual.id, fecha: hoyISO(), tipo: 'gasto', partidas: [], tercero: '', descripcion: actual.texto || '' };
   const vistas = {
     resumen: vistaResumen, movimientos: () => vistaMovimientos(extra), cuentas: vistaCuentas, presupuesto: vistaPresupuesto,
-    recurrentes: vistaRecurrentes, impuestos: () => vistaImpuestos(anio), datos: vistaDatos,
+    recurrentes: vistaRecurrentes, impuestos: () => vistaImpuestos(anio), datos: () => vistaDatos(conIA),
+    bandeja: () => S.vistaBandeja(estado, { seleccionado: actual?.id, conIA, formulario: actual ? formularioMovimiento(prellenado) : '' }),
+    fugas: () => S.vistaFugas(estado, ignoradas), metas: () => S.vistaMetas(estado),
+    contador: () => S.vistaContador(estado, { anio, docs, preguntasGenerales }),
   };
   const vista = vistas[sec] || vistas.resumen;
   const conMes = ['resumen', 'presupuesto'].includes(sec);
@@ -355,30 +411,47 @@ async function montar(el, seccion = 'resumen') {
       <p class="sutil">Partida doble, presupuesto, honorarios y renta — en pesos colombianos.</p></div>
       ${conMes ? h`<input type="month" id="sel-mes" value="${estado.mes}" aria-label="Mes de análisis">` : ''}</header>
     <nav class="pestanas" aria-label="Secciones de finanzas">${SECCIONES.map(([id, t]) =>
-      h`<a href="#/finanzas/${id}" class="${id === sec ? 'activo' : ''}" ${id === sec ? 'aria-current="page"' : ''}>${t}${id === 'recurrentes' && recurrentesPendientes() ? h` <span class="punto"></span>` : ''}</a>`)}</nav>
+      h`<a href="#/finanzas/${id}" class="${id === sec ? 'activo' : ''}" ${id === sec ? 'aria-current="page"' : ''}>${t}${(id === 'recurrentes' && recurrentesPendientes()) || (id === 'bandeja' && pendientes.length) ? h` <span class="punto"></span>` : ''}</a>`)}</nav>
     <div id="vista">${vista()}</div>`;
-  conectar(el, sec, () => montar(el, seccion));
+  conectar(el, sec, () => montar(el, seccion), { anio, docs, preguntasGenerales, ignoradas });
 }
 
-function conectar(el, sec, refrescar) {
+function conectar(el, sec, refrescar, ctx) {
   $('#sel-mes', el)?.addEventListener('change', (e) => { estado.mes = e.target.value || estado.mes; refrescar(); });
   $('#sel-anio', el)?.addEventListener('change', (e) => { location.hash = `#/finanzas/impuestos:${e.target.value}`; });
 
   const fMov = $('#f-mov', el);
   if (fMov) {
-    const editar = estado.asientos.find((a) => a.id === fMov.id.value);
+    const editar = estado.asientos.find((a) => a.id === fMov.id.value) || prellenado;
     ajustarFormulario(fMov, editar);
+    // Sugerencia de rubro por reglas, historial o palabras clave, mientras el usuario no lo haya elegido a mano.
+    let elegidoAMano = !!(editar && editar.partidas?.length);
+    const campoRubro = () => (fMov.tipo.value === 'ingreso' ? fMov.origen : fMov.destino);
+    fMov.destino.addEventListener('change', () => { elegidoAMano = true; });
+    fMov.origen.addEventListener('change', () => { elegidoAMano = true; });
+    const sugerir = () => {
+      if (elegidoAMano || !['gasto', 'ingreso'].includes(fMov.tipo.value)) return;
+      const sug = L.sugerirCuenta({ descripcion: fMov.descripcion.value, tercero: fMov.tercero.value, tipo: fMov.tipo.value }, estado.asientos, estado.reglas, estado.cuentas);
+      const campo = campoRubro();
+      if (sug.cuenta && [...campo.options].some((o) => o.value === sug.cuenta)) {
+        campo.value = sug.cuenta;
+        $('#sugerencia', fMov).textContent = `Rubro sugerido: ${nombreCuenta(sug.cuenta)} (por ${sug.motivo}). Puedes cambiarlo.`;
+      }
+    };
+    fMov.tercero.addEventListener('change', sugerir);
+    fMov.descripcion.addEventListener('change', sugerir);
     $$('[name=tipo]', fMov).forEach((r) => r.addEventListener('change', () => ajustarFormulario(fMov)));
     fMov.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (await guardarMovimiento(fMov)) {
-        if (fMov.id.value) location.hash = '#/finanzas/movimientos'; else refrescar();
+        if (sec === 'bandeja') { soporteVisto = null; refrescar(); }
+        else if (fMov.id.value) location.hash = '#/finanzas/movimientos'; else refrescar();
       }
     });
     const filtrar = () => {
       $('#lista-movs', el).innerHTML = html`${listaMovimientos({ mes: $('#fil-mes', el).value, cuenta: $('#fil-cuenta', el).value, q: $('#fil-q', el).value })}`;
     };
-    ['#fil-mes', '#fil-cuenta', '#fil-q'].forEach((s) => $(s, el).addEventListener('input', filtrar));
+    ['#fil-mes', '#fil-cuenta', '#fil-q'].forEach((s) => $(s, el)?.addEventListener('input', filtrar));
   }
 
   el.onclick = async (e) => {
@@ -386,6 +459,25 @@ function conectar(el, sec, refrescar) {
     if (!b) return;
     const d = b.dataset;
     if (d.editar) location.hash = `#/finanzas/movimientos:${d.editar}`;
+    else if (d.verSoporte) { soporteVisto = d.verSoporte; prellenado = null; refrescar(); }
+    else if (d.leerIa) await leerConIA(b, d.leerIa, refrescar);
+    else if (d.descartar && confirm('¿Descartar este soporte?')) { const x = estado.soportes.find((y) => y.id === d.descartar); await DB.guardar('soportes', { ...x, estado: 'descartado' }); prellenado = null; refrescar(); }
+    else if (d.ignorarFuga) { await DB.fijarAjuste('fugas_ignoradas', [...ctx.ignoradas, d.ignorarFuga]); refrescar(); }
+    else if ('restaurarFugas' in d) { await DB.fijarAjuste('fugas_ignoradas', []); refrescar(); }
+    else if ('metasSugeridas' in d) { await DB.guardarVarios('metas', S.metasSugeridas(Number(hoyISO().slice(0, 4)))); aviso('Metas creadas: ajústalas a tu realidad'); refrescar(); }
+    else if (d.borrarMeta && confirm('¿Borrar esta meta? Los movimientos asociados se conservan.')) { await DB.borrar('metas', d.borrarMeta); refrescar(); }
+    else if (d.resolver) { const a = estado.asientos.find((x) => x.id === d.resolver); await DB.guardar('asientos', { ...a, preguntaResuelta: true }); refrescar(); }
+    else if (d.resolverGeneral) { await DB.fijarAjuste('contador_preguntas', ctx.preguntasGenerales.filter((_, i) => i !== Number(d.resolverGeneral))); refrescar(); }
+    else if (d.paquete) await enviarAlContador(b, d.paquete, ctx);
+    else if ('guardarClave' in d) {
+      const v = $('#ia-clave', el).value.trim();
+      if (!v.startsWith('sk-ant-')) return aviso('La clave debe empezar por sk-ant-', 'mal');
+      await DB.fijarAjuste('ia_clave', v); aviso('Clave guardada en este dispositivo'); refrescar();
+    } else if ('probarClave' in d) {
+      b.disabled = true; b.textContent = 'Probando…';
+      try { await IA.probarClave(); aviso('La clave funciona ✓'); } catch (err) { aviso(err.message, 'mal'); }
+      b.disabled = false; b.textContent = 'Probar';
+    } else if ('borrarClave' in d && confirm('¿Borrar la clave de este dispositivo?')) { await DB.fijarAjuste('ia_clave', ''); refrescar(); }
     else if (d.borrar && confirm('¿Borrar este movimiento?')) { await DB.borrar('asientos', d.borrar); aviso('Borrado'); refrescar(); }
     else if (d.alternar) { const c = cuenta(d.alternar); await DB.guardar('cuentas', { ...c, activa: !c.activa }); refrescar(); }
     else if (d.borrarRec) { await DB.borrar('recurrentes', d.borrarRec); refrescar(); }
@@ -454,12 +546,88 @@ function conectar(el, sec, refrescar) {
       location.hash = '#/finanzas/movimientos';
     });
   });
+  $('#arch-soporte', el)?.addEventListener('change', async (e) => {
+    if (!e.target.files.length) return;
+    await S.agregarArchivos([...e.target.files]);
+    aviso(`${e.target.files.length} soporte(s) agregados`); prellenado = null; refrescar();
+  });
+  $('#f-meta', el)?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = formularioAObjeto(e.target);
+    const objetivo = L.aCentavos(d.objetivo);
+    if (!(objetivo > 0)) return aviso('Escribe el valor objetivo', 'mal');
+    await DB.guardar('metas', { nombre: d.nombre.trim(), tipo: d.tipo, objetivo, fecha: d.fecha || null,
+      tasaEA: d.tasa ? Number(String(d.tasa).replace(',', '.')) / 100 : undefined, partes: S.partesDesdeTexto(d.partes),
+      cuentaGasto: d.tipo === 'apoyo' ? 'apoyo_mama' : d.tipo === 'familia' ? 'familia' : undefined });
+    aviso('Meta creada'); refrescar();
+  });
+  el.querySelectorAll('[data-aportar]').forEach((f) => f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const meta = estado.metas.find((m) => m.id === f.dataset.aportar);
+    const monto = L.aCentavos(formularioAObjeto(f).monto);
+    if (!(monto > 0)) return aviso('Valor inválido', 'mal');
+    await DB.guardar('asientos', S.asientoAporte(meta, monto, hoyISO()));
+    aviso('Registrado'); refrescar();
+  }));
+  $('#f-pregunta', el)?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await DB.fijarAjuste('contador_preguntas', [...ctx.preguntasGenerales, formularioAObjeto(e.target).pregunta.trim()]); refrescar();
+  });
+  el.querySelectorAll('[data-doc]').forEach((c) => c.addEventListener('change', async () => {
+    const i = Number(c.dataset.doc);
+    await DB.fijarAjuste(`contador_docs_${ctx.anio}`, c.checked ? [...new Set([...ctx.docs, i])] : ctx.docs.filter((x) => x !== i));
+    refrescar();
+  }));
+  $('#sel-anio-cont', el)?.addEventListener('change', (e) => { location.hash = `#/finanzas/contador:${e.target.value}`; });
   $('#arch-json', el)?.addEventListener('change', async (e) => {
     const archivo = e.target.files[0];
     if (!archivo || !confirm('Restaurar reemplaza TODOS los datos actuales. ¿Continuar?')) return;
     try { await DB.restaurar(JSON.parse(await leerArchivo(archivo))); aviso('Respaldo restaurado'); refrescar(); }
     catch (err) { aviso(err.message, 'mal'); }
   });
+}
+
+// Pares comercio → rubro más usados: le enseñan a la IA las preferencias del usuario.
+function historialRubros(n = 40) {
+  const conteo = {};
+  for (const a of estado.asientos) {
+    if (!a.tercero) continue;
+    const rubro = a.partidas.find((p) => ['gasto', 'ingreso'].includes(cuenta(p.cuenta)?.tipo))?.cuenta;
+    if (rubro) { const k = `${a.tercero}|${rubro}`; conteo[k] = (conteo[k] || 0) + 1; }
+  }
+  return Object.entries(conteo).sort((x, y) => y[1] - x[1]).slice(0, n).map(([k]) => { const [tercero, c] = k.split('|'); return { tercero, cuenta: c }; });
+}
+
+async function leerConIA(boton, id, refrescar) {
+  const sop = estado.soportes.find((x) => x.id === id);
+  if (!sop?.archivo) return;
+  boton.disabled = true; boton.textContent = 'Leyendo…';
+  try {
+    const r = await IA.leerSoporte(sop.archivo, { cuentas: estado.cuentas, historial: historialRubros() });
+    if (r.tipo === 'no_es_soporte') { aviso('La imagen no parece un soporte de pago o ingreso.', 'mal'); }
+    const borrador = S.borradorDesdeIA(r, estado.cuentas);
+    prellenado = { ...borrador, soporteId: sop.id };
+    soporteVisto = sop.id;
+    await DB.guardar('soportes', { ...sop, ia: { ...r, uso: undefined }, tokens: r.uso });
+    aviso(r.confianza === 'alta' ? 'Listo: revisa y confirma' : `Revisa los datos (confianza ${r.confianza})`);
+    refrescar();
+  } catch (err) {
+    aviso(err.message, 'mal');
+    boton.disabled = false; boton.textContent = '✨ Leer con IA';
+  }
+}
+
+async function enviarAlContador(boton, modo, ctx) {
+  boton.disabled = true;
+  try {
+    const zip = await S.paqueteContador(estado, ctx.anio, ctx);
+    if (modo === 'zip') descargar(`contabilidad-${ctx.anio}.zip`, zip, 'application/zip');
+    else {
+      const r = await S.enviarPaquete(zip, ctx.anio, S.mensajeContador(estado, ctx.anio, ctx.preguntasGenerales));
+      if (r === 'descargado') aviso('ZIP descargado: adjúntalo en el chat de WhatsApp que se abrió');
+    }
+  } catch (err) { aviso(err.message, 'mal'); }
+  boton.disabled = false;
 }
 
 async function exportar(formato) {
@@ -481,7 +649,8 @@ async function tarjeta() {
   const mes = hoyISO().slice(0, 7);
   const er = L.estadoResultados(estado.asientos, estado.cuentas, `${mes}-01`, L.finDeMes(mes));
   const bg = L.balanceGeneral(estado.asientos, estado.cuentas, hoyISO());
-  return h`<dl class="mini"><div><dt>Resultado del mes</dt><dd class="${er.resultado >= 0 ? 'pos' : 'neg'}">${fmt(er.resultado)}</dd></div>
+  const nSop = (await DB.todos('soportes')).filter((x) => x.estado === 'pendiente').length;
+  return h`${nSop ? h`<span class="chip">📥 ${nSop} soporte(s) por clasificar</span>` : ''}<dl class="mini"><div><dt>Resultado del mes</dt><dd class="${er.resultado >= 0 ? 'pos' : 'neg'}">${fmt(er.resultado)}</dd></div>
     <div><dt>Patrimonio neto</dt><dd>${fmt(bg.patrimonioNeto)}</dd></div></dl>`;
 }
 

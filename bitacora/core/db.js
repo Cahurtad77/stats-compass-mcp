@@ -3,8 +3,10 @@
 // (navegación privada estricta), se usa memoria y se avisa en la interfaz.
 
 const NOMBRE = 'bitacora';
-const VERSION = 1;
-export const ALMACENES = ['cuentas', 'asientos', 'presupuestos', 'recurrentes', 'reglas', 'ajustes'];
+const VERSION = 2;
+export const ALMACENES = ['cuentas', 'asientos', 'presupuestos', 'recurrentes', 'reglas', 'ajustes', 'soportes', 'metas'];
+// Ajustes sensibles que nunca salen en un respaldo.
+const PRIVADOS = new Set(['ia_clave']);
 
 let db = null;
 const memoria = Object.fromEntries(ALMACENES.map((a) => [a, new Map()]));
@@ -68,18 +70,31 @@ export async function vaciar(almacen) {
   else await tx(almacen, 'readwrite', (s) => s.clear());
 }
 
+const blobADataURL = (b) => new Promise((ok, mal) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => mal(r.error); r.readAsDataURL(b); });
+const dataURLABlob = async (u) => (await fetch(u)).blob();
+
 export async function respaldo() {
   const datos = {};
   for (const a of ALMACENES) datos[a] = await todos(a);
+  datos.ajustes = datos.ajustes.filter((x) => !PRIVADOS.has(x.id));
+  datos.soportes = await Promise.all(datos.soportes.map(async (s) => ({ ...s, archivo: s.archivo ? await blobADataURL(s.archivo) : null })));
   return { app: 'bitacora', version: VERSION, exportado: new Date().toISOString(), datos };
 }
 
 export async function restaurar(json) {
   if (json?.app !== 'bitacora' || !json.datos) throw new Error('El archivo no es un respaldo de Bitácora.');
+  const clave = await ajuste('ia_clave', null);
+  // Convertir todo antes de borrar: si algo falla, los datos actuales quedan intactos.
+  const listas = {};
+  for (const a of ALMACENES) {
+    listas[a] = Array.isArray(json.datos[a]) ? json.datos[a] : [];
+    if (a === 'soportes') listas[a] = await Promise.all(listas[a].map(async (s) => ({ ...s, archivo: s.archivo ? await dataURLABlob(s.archivo) : null })));
+  }
   for (const a of ALMACENES) {
     await vaciar(a);
-    if (Array.isArray(json.datos[a])) await guardarVarios(a, json.datos[a]);
+    if (listas[a].length) await guardarVarios(a, listas[a]);
   }
+  if (clave) await fijarAjuste('ia_clave', clave);
 }
 
 export async function ajuste(clave, porDefecto) {

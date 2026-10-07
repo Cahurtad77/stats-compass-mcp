@@ -29,6 +29,7 @@ export function cuentasPorDefecto() {
     c('patrimonio', '3105', 'Patrimonio inicial', 'patrimonio'),
     c('salario', '4105', 'Salario docencia', 'ingreso', { grupo: 'laboral' }),
     c('honorarios', '4150', 'Honorarios consultoría', 'ingreso', { grupo: 'consultoria' }),
+    c('ahorro_metas', '1210', 'Ahorro para metas', 'activo'),
     c('rendimientos', '4210', 'Rendimientos financieros', 'ingreso'),
     c('otros_ing', '4295', 'Otros ingresos', 'ingreso'),
     c('vivienda', '5105', 'Vivienda y servicios', 'gasto'),
@@ -38,6 +39,9 @@ export function cuentasPorDefecto() {
     c('educacion', '5125', 'Educación (familia y formación)', 'gasto'),
     c('familia', '5130', 'Familia y hogar', 'gasto'),
     c('ocio', '5135', 'Ocio y cultura', 'gasto'),
+    c('apoyo_mama', '5132', 'Apoyo a mamá', 'gasto', { grupo: 'familia' }),
+    c('vacaciones', '5137', 'Viajes y vacaciones', 'gasto'),
+    c('suscripciones', '5138', 'Suscripciones y membresías', 'gasto'),
     c('trabajo', '5140', 'Gastos profesionales (software, equipos)', 'gasto', { deducible: true }),
     c('financieros', '5305', 'Gastos financieros (intereses, 4x1000)', 'gasto'),
     c('impuestos', '5400', 'Impuestos', 'gasto'),
@@ -317,4 +321,182 @@ export function asientosAHledger(asientos, cuentas, moneda = 'COP') {
     `${a.fecha} ${a.tercero ? a.tercero + ' | ' : ''}${a.descripcion || ''}`.trimEnd(),
     ...a.partidas.map((p) => `    ${nombre(p.cuenta).padEnd(44)} ${(p.monto / 100).toFixed(2)} ${moneda}`),
   ].join('\n')).join('\n\n') + '\n';
+}
+
+// ---------- Sugerencia de rubro ----------
+const normalizarTexto = (t) => String(t || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// Orden: reglas explícitas > historial del mismo tercero/comercio > palabras clave comunes > null.
+const PALABRAS = [
+  [/EXITO|CARULLA|D1|ARA|JUMBO|OLIMPICA|MERCADO|SUPERMERCADO|PANADERIA|RAPPI/, 'alimentacion'],
+  [/EPM|ENEL|CODENSA|GAS NATURAL|VANTI|ACUEDUCTO|CLARO|MOVISTAR|TIGO|ETB|ARRIENDO|ADMINISTRACION/, 'vivienda'],
+  [/TERPEL|PRIMAX|ESSO|GASOLINA|PEAJE|PARQUEADERO|UBER|DIDI|CABIFY|METRO|TAXI/, 'transporte'],
+  [/DROGUERIA|FARMACIA|CRUZ VERDE|COLSUBSIDIO|EPS|CLINICA|MEDIC|LABORATORIO|ODONTO/, 'salud'],
+  [/COLEGIO|UNIVERSIDAD|MATRICULA|LIBRERIA|CURSO|PANAMERICANA/, 'educacion'],
+  [/NETFLIX|SPOTIFY|DISNEY|HBO|MAX|AMAZON PRIME|YOUTUBE|APPLE|GOOGLE ONE|ICLOUD|CHATGPT|CLAUDE/, 'suscripciones'],
+  [/AVIANCA|LATAM|WINGO|HOTEL|AIRBNB|BOOKING|DESPEGAR/, 'vacaciones'],
+  [/CINE|CINEMARK|PROCINAL|RESTAURANTE|BAR |TEATRO/, 'ocio'],
+  [/4X1000|GMF|CUOTA DE MANEJO|INTERES|COMISION/, 'financieros'],
+  [/DIAN|PREDIAL|IMPUESTO|VEHICULAR/, 'impuestos'],
+];
+
+export function sugerirCuenta({ descripcion = '', tercero = '', tipo = 'gasto' }, asientos = [], reglas = [], cuentas = []) {
+  const texto = `${tercero} ${descripcion}`;
+  const tipoDe = (id) => cuentas.find((c) => c.id === id)?.tipo;
+  const buscado = tipo === 'ingreso' ? 'ingreso' : 'gasto';
+  const valida = (id) => id && (!cuentas.length || tipoDe(id) === buscado);
+  const porRegla = categorizar(texto, reglas, null);
+  if (valida(porRegla)) return { cuenta: porRegla, motivo: 'regla' };
+  const clave = normalizarTexto(tercero || descripcion);
+  if (clave) {
+    const conteo = {};
+    for (const a of asientos) {
+      if (normalizarTexto(a.tercero || a.descripcion) !== clave) continue;
+      for (const p of a.partidas) if (valida(p.cuenta)) conteo[p.cuenta] = (conteo[p.cuenta] || 0) + 1;
+    }
+    const mejor = Object.entries(conteo).sort((x, y) => y[1] - x[1])[0];
+    if (mejor) return { cuenta: mejor[0], motivo: 'historial' };
+  }
+  if (buscado === 'gasto') {
+    const n = normalizarTexto(texto);
+    const hit = PALABRAS.find(([re]) => re.test(n));
+    if (hit && valida(hit[1])) return { cuenta: hit[1], motivo: 'palabra clave' };
+  }
+  return { cuenta: null, motivo: null };
+}
+
+// ---------- Detección de fugas ----------
+const media = (xs) => xs.reduce((t, x) => t + x, 0) / (xs.length || 1);
+const desv = (xs) => { const m = media(xs); return Math.sqrt(media(xs.map((x) => (x - m) ** 2))); };
+const restarDias = (iso, d) => { const f = new Date(`${iso}T00:00:00Z`); f.setUTCDate(f.getUTCDate() - d); return f.toISOString().slice(0, 10); };
+
+// Devuelve hallazgos ordenados por impacto anual estimado (centavos).
+export function detectarFugas(asientos, cuentas, hoy, { umbralHormiga = 30_000_00, recurrentesConocidos = [] } = {}) {
+  const tipo = Object.fromEntries(cuentas.map((c) => [c.id, c]));
+  const gastos = [];
+  for (const a of asientos) for (const p of a.partidas) {
+    if (tipo[p.cuenta]?.tipo === 'gasto' && p.monto > 0) gastos.push({ fecha: a.fecha, monto: p.monto, cuenta: p.cuenta, clave: normalizarTexto(a.tercero || a.descripcion), texto: a.tercero || a.descripcion || '', etiquetas: a.etiquetas || [] });
+  }
+  const hallazgos = [];
+  const conocidos = new Set(recurrentesConocidos.map(normalizarTexto));
+
+  // 1. Cobros recurrentes (suscripciones) que no están declarados como recurrentes.
+  const desde12 = restarDias(hoy, 365);
+  const porClave = {};
+  // Obligaciones (arriendo, colegio, servicios, salud, apoyo familiar, impuestos) no son fugas: solo se revisan
+  // rubros donde suelen esconderse cobros olvidados.
+  const revisables = new Set(['suscripciones', 'ocio', 'trabajo', 'otros_gas', 'financieros']);
+  for (const g of gastos) if (g.clave && g.fecha >= desde12 && !g.etiquetas.includes('recurrente') && revisables.has(g.cuenta)) (porClave[g.clave] ||= []).push(g);
+  for (const [clave, gs] of Object.entries(porClave)) {
+    const meses = new Set(gs.map((g) => mesDe(g.fecha)));
+    if (meses.size < 3 || conocidos.has(clave)) continue;
+    const montos = gs.map((g) => g.monto), m = media(montos);
+    if (desv(montos) / m > 0.05) continue; // las suscripciones cobran casi lo mismo cada vez
+    const ultimo = gs.map((g) => g.fecha).sort().at(-1);
+    if (ultimo < restarDias(hoy, 45)) continue;
+    hallazgos.push({ tipo: 'recurrente', cuenta: gs[0].cuenta, titulo: `Cobro recurrente: ${gs[0].texto}`,
+      detalle: `Aparece en ${meses.size} meses por ~${(m / 100).toLocaleString('es-CO')} cada vez. ¿Lo sigues usando?`, impactoAnual: Math.round(m * 12) });
+  }
+
+  // 2. Gastos hormiga (últimos 30 días).
+  const desde30 = restarDias(hoy, 30);
+  const recientes = gastos.filter((g) => g.fecha > desde30 && g.fecha <= hoy);
+  const pequenos = recientes.filter((g) => g.monto < umbralHormiga);
+  const totalPeq = pequenos.reduce((t, g) => t + g.monto, 0), totalRec = recientes.reduce((t, g) => t + g.monto, 0);
+  if (pequenos.length >= 8 && totalRec && totalPeq / totalRec >= 0.05) {
+    hallazgos.push({ tipo: 'hormiga', titulo: `Gastos hormiga: ${pequenos.length} compras pequeñas en 30 días`,
+      detalle: `Suman ${(totalPeq / 100).toLocaleString('es-CO')} (${Math.round((totalPeq / totalRec) * 100)} % del gasto del período).`, impactoAnual: Math.round(totalPeq * 12) });
+  }
+
+  // 3. Categorías fuera de su comportamiento habitual: mes actual vs media + 2 desviaciones de los 6 meses previos.
+  const mesActual = hoy.slice(0, 7), previos = mesesHasta(mesActual, 7).slice(0, 6);
+  const porCuentaMes = {};
+  for (const g of gastos) { const k = `${g.cuenta}|${mesDe(g.fecha)}`; porCuentaMes[k] = (porCuentaMes[k] || 0) + g.monto; }
+  for (const c of cuentas.filter((x) => x.tipo === 'gasto')) {
+    const hist = previos.map((m) => porCuentaMes[`${c.id}|${m}`] || 0);
+    if (hist.filter((x) => x > 0).length < 3) continue;
+    const actual = porCuentaMes[`${c.id}|${mesActual}`] || 0, m = media(hist), s = desv(hist);
+    if (actual > m + 2 * s && actual > m * 1.25 && actual - m > 50_000_00) {
+      hallazgos.push({ tipo: 'anomalia', cuenta: c.id, titulo: `${c.nombre} por encima de lo normal`,
+        detalle: `Este mes van ${(actual / 100).toLocaleString('es-CO')} frente a un promedio de ${(m / 100).toLocaleString('es-CO')} (+${Math.round((actual / m - 1) * 100)} %).`, impactoAnual: Math.round((actual - m) * 12) });
+    }
+  }
+
+  // 4. Costos financieros evitables (intereses, comisiones, 4x1000).
+  const fin = gastos.filter((g) => g.cuenta === 'financieros' && g.fecha >= desde12).reduce((t, g) => t + g.monto, 0);
+  if (fin > 0) hallazgos.push({ tipo: 'financiero', cuenta: 'financieros', titulo: 'Costos financieros en 12 meses',
+    detalle: 'Intereses de tarjeta, cuotas de manejo y comisiones. Revisa si puedes pagar la tarjeta de contado o cambiar de producto.', impactoAnual: fin });
+
+  return hallazgos.sort((a, b) => b.impactoAnual - a.impactoAnual);
+}
+
+// ---------- Metas (vacaciones, inversión, apoyo, familia) ----------
+// Aportado = movimientos con etiqueta `meta:<id>` que llevan dinero a activos (ahorro) o pagan gastos de la meta.
+export function estadoMeta(meta, asientos, cuentas, hoy) {
+  const etiqueta = `meta:${meta.id}`;
+  const tipo = Object.fromEntries(cuentas.map((c) => [c.id, c.tipo]));
+  let aportado = 0, gastado = 0;
+  const porMes = {};
+  for (const a of asientos) {
+    if (!(a.etiquetas || []).includes(etiqueta)) continue;
+    for (const p of a.partidas) {
+      if (p.monto <= 0) continue;
+      if (tipo[p.cuenta] === 'gasto') { gastado += p.monto; porMes[mesDe(a.fecha)] = (porMes[mesDe(a.fecha)] || 0) + p.monto; }
+      else if (tipo[p.cuenta] === 'activo' && a.tipo === 'transferencia') aportado += p.monto;
+    }
+  }
+  const [ah, mh] = hoy.split('-').map(Number);
+  const mesesRestantes = meta.fecha ? Math.max(0, (Number(meta.fecha.slice(0, 4)) - ah) * 12 + Number(meta.fecha.slice(5, 7)) - mh) : null;
+  const base = meta.tipo === 'apoyo' || meta.tipo === 'familia' ? gastado : aportado;
+  const falta = Math.max(0, (meta.objetivo || 0) - base);
+  return {
+    aportado, gastado, falta, porMes,
+    avance: meta.objetivo ? Math.min(1, base / meta.objetivo) : 0,
+    mesesRestantes,
+    aporteSugerido: mesesRestantes ? Math.ceil(falta / mesesRestantes) : falta,
+    partes: (meta.partes || []).map((pt) => ({ ...pt, gastado: asientos.filter((a) => (a.etiquetas || []).includes(etiqueta) && (a.etiquetas || []).includes(`parte:${pt.nombre}`))
+      .reduce((t, a) => t + a.partidas.filter((p) => p.monto > 0 && tipo[p.cuenta] === 'gasto').reduce((u, p) => u + p.monto, 0), 0) })),
+  };
+}
+
+// Valor futuro con aportes mensuales. tasaEA = tasa efectiva anual (0.11 = 11 %).
+export function proyeccionInversion({ capital = 0, aporteMensual = 0, tasaEA = 0, anios = 1 }) {
+  const im = Math.pow(1 + tasaEA, 1 / 12) - 1;
+  const serie = [];
+  let saldo = capital, aportes = capital;
+  for (let m = 1; m <= Math.round(anios * 12); m++) {
+    saldo = saldo * (1 + im) + aporteMensual;
+    aportes += aporteMensual;
+    if (m % 12 === 0 || m === Math.round(anios * 12)) serie.push({ mes: m, saldo: Math.round(saldo), aportes: Math.round(aportes) });
+  }
+  return { final: Math.round(saldo), aportes: Math.round(aportes), rendimiento: Math.round(saldo - aportes), serie };
+}
+
+// ---------- Proyección de flujo de caja a partir de los recurrentes ----------
+export function proyectarFlujo(recurrentes, cuentas, saldoInicial, hoy, meses = 3) {
+  const liquidas = new Set(['caja', 'banco']);
+  const tipo = Object.fromEntries(cuentas.map((c) => [c.id, c.tipo]));
+  const hasta = (() => { const d = new Date(`${hoy}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() + meses); return d.toISOString().slice(0, 10); })();
+  const eventos = [];
+  for (const r of recurrentes) {
+    const virtual = { ...r, ultima: r.ultima && r.ultima > hoy ? r.ultima : (L_ultimaAntes(r, hoy)) };
+    for (const f of fechasPendientes(virtual, hasta)) {
+      if (f <= hoy) continue;
+      const { origen, destino, monto, descripcion } = r.plantilla;
+      let efecto = 0;
+      if (liquidas.has(destino)) efecto += monto;
+      if (liquidas.has(origen)) efecto -= monto;
+      if (efecto) eventos.push({ fecha: f, descripcion, efecto, tipo: tipo[destino] });
+    }
+  }
+  eventos.sort((a, b) => a.fecha.localeCompare(b.fecha));
+  let saldo = saldoInicial, minimo = { saldo: saldoInicial, fecha: hoy };
+  const linea = eventos.map((e) => { saldo += e.efecto; if (saldo < minimo.saldo) minimo = { saldo, fecha: e.fecha }; return { ...e, saldo }; });
+  return { eventos: linea, saldoFinal: saldo, minimo };
+}
+// Última ocurrencia <= hoy (o undefined si aún no inicia), para proyectar solo lo futuro.
+function L_ultimaAntes(r, hoy) {
+  const pasadas = fechasPendientes({ ...r, ultima: undefined }, hoy);
+  return pasadas.at(-1);
 }

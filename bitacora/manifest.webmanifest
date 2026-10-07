@@ -8,5 +8,31 @@
   "background_color": "#f6f5f1",
   "theme_color": "#1f6f5c",
   "lang": "es-CO",
-  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "share_target": {
+    "action": "./compartir",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "archivos",
+          "accept": [
+            "image/*",
+            "application/pdf"
+          ]
+        }
+      ]
+    }
+  }
 }

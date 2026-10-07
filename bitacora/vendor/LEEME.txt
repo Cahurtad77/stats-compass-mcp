@@ -1,0 +1,1 @@
+@anthropic-ai/sdk 0.131.0 empaquetado con esbuild (formato ESM para navegador). Licencia MIT en anthropic-sdk.LICENSE. Regenerar: npm i @anthropic-ai/sdk esbuild && echo 'export { default } from "@anthropic-ai/sdk";' > e.mjs && npx esbuild e.mjs --bundle --format=esm --platform=browser --minify --outfile=anthropic-sdk.mjs

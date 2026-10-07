@@ -27,6 +27,19 @@ en el dispositivo y se exportan a formatos abiertos (CSV, JSON, hledger) para an
 - **Gastos deducibles/profesionales** marcados para tenerlos a mano al declarar.
 - **Exportación tidy a R** (`r/leer_bitacora.R`) con resumen mensual, gasto por categoría, gráfico y pronóstico ETS.
 
+### Fase 1 (implementada): soportes desde WhatsApp, fugas, contador y metas
+
+| Necesidad | Solución | Inspiración |
+|---|---|---|
+| Fotos de pagos desde WhatsApp | Web Share Target (Android): Compartir → Bitácora → Bandeja | Expensify, Dext |
+| Leer el soporte y elegir el rubro | Lectura con IA (Claude) y sugerencia por reglas, historial y palabras clave | Dext, Monefy |
+| Encontrar fugas | Suscripciones, gastos hormiga, anomalías estadísticas, costos financieros | Rocket Money, Fintonic |
+| Comunicación con el contador | Paquete ZIP con libro, resumen, soportes y preguntas; envío por WhatsApp | Alegra, Siigo (portal del contador) |
+| Vacaciones, inversiones, mamá, familia | Metas con aporte sugerido, partes del viaje y simulador | YNAB (metas), Goodbudget (sobres) |
+| Caja de la familia | Proyección de 3 meses a partir de los recurrentes | PocketSmith |
+
+La Fase B (bot de WhatsApp, sincronización familiar y acceso del contador) está en `fase-b-whatsapp-sincronizacion.md`.
+
 ## 2. Hoja de ruta: los demás módulos
 
 Cada módulo se conecta al mismo shell (`core/app.js`) y al mismo almacenamiento local. Orden sugerido según impacto:

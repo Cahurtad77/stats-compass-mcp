@@ -21,6 +21,7 @@ export const $ = (sel, raiz = document) => raiz.querySelector(sel);
 export const $$ = (sel, raiz = document) => [...raiz.querySelectorAll(sel)];
 
 export function aviso(msg, tipo = 'ok') {
+  document.querySelectorAll('.aviso').forEach((x) => x.remove());
   const el = document.createElement('div');
   el.className = `aviso aviso-${tipo}`;
   el.setAttribute('role', 'status');
